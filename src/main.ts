@@ -1308,6 +1308,23 @@ class ChatApp {
       }`;
       title.textContent = thread.title;
       title.onclick = () => this.switchThread(thread.id);
+      title.ondblclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.startRenameThread(thread.id, title);
+      };
+
+      const rename = document.createElement('button');
+      rename.className =
+        'flex-shrink-0 p-1 rounded text-ink-400 opacity-0 group-hover:opacity-100 hover:text-accent hover:bg-cream-100 transition-opacity';
+      rename.title = 'Rename chat';
+      rename.setAttribute('aria-label', 'Rename chat');
+      rename.innerHTML =
+        '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>';
+      rename.onclick = (e) => {
+        e.stopPropagation();
+        this.startRenameThread(thread.id, title);
+      };
 
       const del = document.createElement('button');
       del.className =
@@ -1323,9 +1340,58 @@ class ChatApp {
 
       row.appendChild(favorite);
       row.appendChild(title);
+      row.appendChild(rename);
       row.appendChild(del);
       this.threadList.appendChild(row);
     }
+  }
+
+  private startRenameThread(threadId: string, titleBtn: HTMLButtonElement) {
+    const thread = this.threads.find((t) => t.id === threadId);
+    if (!thread) return;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = thread.title;
+    input.className =
+      'flex-1 min-w-0 mx-1 my-0.5 bg-cream-50 border border-cream-300 rounded px-2 py-1 text-[13px] text-ink-900 outline-none focus:border-accent';
+    input.setAttribute('aria-label', 'Rename chat');
+
+    let settled = false;
+    const commit = () => {
+      if (settled) return;
+      settled = true;
+      const trimmed = input.value.trim();
+      if (trimmed && trimmed !== thread.title) {
+        thread.title = trimmed;
+        thread.updatedAt = Date.now();
+        saveThreads(this.threads);
+        if (threadId === this.currentThreadId) {
+          this.currentThreadTitle.textContent = trimmed;
+        }
+      }
+      this.renderThreadList();
+    };
+    const cancel = () => {
+      if (settled) return;
+      settled = true;
+      this.renderThreadList();
+    };
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancel();
+      }
+    });
+    input.addEventListener('blur', commit);
+
+    titleBtn.replaceWith(input);
+    input.focus();
+    input.select();
   }
 
   private toggleThreadFavorite(threadId: string) {

@@ -8,7 +8,7 @@ A privacy-first, browser-based chat interface that runs AI models locally using 
 - **Optional Web Search Tool**: The composer globe button can fetch basic DuckDuckGo/Wikipedia results and pass them to the local model for the current answer.
 - **OpenWebUI-inspired Design**: Clean chat interface with multiple conversation threads.
 - **Persistent Chats**: Conversations are saved to your browser's localStorage.
-- **Chat Management**: Favorite threads, export a chat as Markdown, copy messages, and compact old context.
+- **Chat Management**: Rename or favorite threads, export a chat as Markdown, copy messages, and compact old context.
 - **Markdown Support**: Assistant responses render markdown with syntax-highlighted code blocks.
 - **Model Registry**: Curated public ONNX presets with GPU-aware dtype selection.
 - **Downloaded Model Manager**: View cached model files and delete them from the browser cache.
@@ -148,7 +148,7 @@ The app loads AI models directly from Hugging Face into your browser's cache. On
 
 Chats are stored in `localStorage` and model files are stored in the browser Cache API used by Transformers.js. Use **Models** in the chat header to inspect downloaded Hugging Face model files, load a cached model, delete a single model, or clear all downloaded model files. Clearing model files does not delete chat history.
 
-Use **Export** to download the current thread as Markdown. Thread favorites are stored with the thread data and only affect sidebar ordering.
+Use **Export** to download the current thread as Markdown. Thread favorites are stored with the thread data and only affect sidebar ordering. Rename a thread from the sidebar with the pencil icon (or double-click its title); Enter saves, Escape cancels.
 
 ### Web Search Tool
 
