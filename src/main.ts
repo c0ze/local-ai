@@ -37,6 +37,13 @@ import {
   type TestResult,
 } from './tester';
 import { formatWebSearchContext, webSearch, type WebSearchResponse } from './webSearch';
+import {
+  clearDownloadedModels,
+  deleteDownloadedModel,
+  estimateStorage,
+  listDownloadedModels,
+  type CachedModel,
+} from './modelCache';
 
 const CONTEXT_TOKEN_STOPS = [
   256,
@@ -96,16 +103,30 @@ class ChatApp {
   private progressText!: HTMLElement;
   private progressFile!: HTMLElement;
   private compactContextBtn!: HTMLButtonElement;
+  private exportChatBtn!: HTMLButtonElement;
   private downloadModelBtn!: HTMLButtonElement;
+  private modelCacheBtn!: HTMLButtonElement;
+  private webgpuHelpBtn!: HTMLButtonElement;
   private modelStatus!: HTMLElement;
   private webgpuStatus!: HTMLElement;
   private currentThreadTitle!: HTMLElement;
   private settingsBtn!: HTMLButtonElement;
   private settingsModal!: HTMLElement;
+  private webgpuHelpModal!: HTMLElement;
+  private closeWebgpuHelpBtn!: HTMLButtonElement;
+  private modelCacheModal!: HTMLElement;
+  private closeModelCacheBtn!: HTMLButtonElement;
+  private refreshModelCacheBtn!: HTMLButtonElement;
+  private clearModelCacheBtn!: HTMLButtonElement;
+  private modelCacheSummary!: HTMLElement;
+  private modelCacheList!: HTMLElement;
   private closeSettingsBtn!: HTMLButtonElement;
   private saveSettingsBtn!: HTMLButtonElement;
   private modelIdInput!: HTMLInputElement;
   private webgpuWarning!: HTMLElement;
+  private webgpuWarningTitle!: HTMLElement;
+  private webgpuWarningMessage!: HTMLElement;
+  private webgpuWarningHelpBtn!: HTMLButtonElement;
   private dismissWebgpuWarningBtn!: HTMLButtonElement;
   private temperatureInput!: HTMLInputElement;
   private temperatureValue!: HTMLElement;
@@ -144,7 +165,13 @@ class ChatApp {
   private testProgressEl!: HTMLElement;
   private testResultsEl!: HTMLElement;
 
-  private gpu: GpuCapability = { available: false, shaderF16: false, features: [] };
+  private gpu: GpuCapability = {
+    available: false,
+    secureContext: typeof window === 'undefined' ? true : window.isSecureContext,
+    fallbackAdapter: false,
+    shaderF16: false,
+    features: [],
+  };
   private testResults: TestResult[] = loadTestResults();
   private testAbort: AbortController | null = null;
   private contextTokenStops = CONTEXT_TOKEN_STOPS.filter((value) => value <= 8192);
@@ -187,16 +214,30 @@ class ChatApp {
     this.progressText = document.getElementById('progress-text')!;
     this.progressFile = document.getElementById('progress-file')!;
     this.compactContextBtn = document.getElementById('compact-context-btn') as HTMLButtonElement;
+    this.exportChatBtn = document.getElementById('export-chat-btn') as HTMLButtonElement;
     this.downloadModelBtn = document.getElementById('download-model-btn') as HTMLButtonElement;
+    this.modelCacheBtn = document.getElementById('model-cache-btn') as HTMLButtonElement;
+    this.webgpuHelpBtn = document.getElementById('webgpu-help-btn') as HTMLButtonElement;
     this.modelStatus = document.getElementById('model-status')!;
     this.webgpuStatus = document.getElementById('webgpu-status')!;
     this.currentThreadTitle = document.getElementById('current-thread-title')!;
     this.settingsBtn = document.getElementById('settings-btn') as HTMLButtonElement;
     this.settingsModal = document.getElementById('settings-modal')!;
+    this.webgpuHelpModal = document.getElementById('webgpu-help-modal')!;
+    this.closeWebgpuHelpBtn = document.getElementById('close-webgpu-help') as HTMLButtonElement;
+    this.modelCacheModal = document.getElementById('model-cache-modal')!;
+    this.closeModelCacheBtn = document.getElementById('close-model-cache') as HTMLButtonElement;
+    this.refreshModelCacheBtn = document.getElementById('refresh-model-cache') as HTMLButtonElement;
+    this.clearModelCacheBtn = document.getElementById('clear-model-cache') as HTMLButtonElement;
+    this.modelCacheSummary = document.getElementById('model-cache-summary')!;
+    this.modelCacheList = document.getElementById('model-cache-list')!;
     this.closeSettingsBtn = document.getElementById('close-settings') as HTMLButtonElement;
     this.saveSettingsBtn = document.getElementById('save-settings') as HTMLButtonElement;
     this.modelIdInput = document.getElementById('model-id-input') as HTMLInputElement;
     this.webgpuWarning = document.getElementById('webgpu-warning')!;
+    this.webgpuWarningTitle = document.getElementById('webgpu-warning-title')!;
+    this.webgpuWarningMessage = document.getElementById('webgpu-warning-message')!;
+    this.webgpuWarningHelpBtn = document.getElementById('webgpu-warning-help-btn') as HTMLButtonElement;
     this.dismissWebgpuWarningBtn = document.getElementById('dismiss-webgpu-warning') as HTMLButtonElement;
     this.temperatureInput = document.getElementById('temperature-input') as HTMLInputElement;
     this.temperatureValue = document.getElementById('temperature-value')!;
@@ -258,11 +299,19 @@ class ChatApp {
     this.newChatBtn.addEventListener('click', () => this.startNewChat());
     this.toggleSidebarBtn.addEventListener('click', () => this.toggleSidebar());
     this.compactContextBtn.addEventListener('click', () => void this.compactCurrentThread());
+    this.exportChatBtn.addEventListener('click', () => this.exportCurrentThread());
     this.downloadModelBtn.addEventListener('click', () => this.loadModel());
+    this.modelCacheBtn.addEventListener('click', () => void this.openModelCache());
+    this.webgpuHelpBtn.addEventListener('click', () => this.openWebgpuHelp());
+    this.webgpuWarningHelpBtn.addEventListener('click', () => this.openWebgpuHelp());
     this.webSearchBtn.addEventListener('click', () => this.toggleWebSearch());
     this.sendBtn.addEventListener('click', () => this.sendMessage());
     this.settingsBtn.addEventListener('click', () => this.openSettings());
     this.closeSettingsBtn.addEventListener('click', () => this.closeSettings());
+    this.closeWebgpuHelpBtn.addEventListener('click', () => this.closeWebgpuHelp());
+    this.closeModelCacheBtn.addEventListener('click', () => this.closeModelCache());
+    this.refreshModelCacheBtn.addEventListener('click', () => void this.refreshModelCache());
+    this.clearModelCacheBtn.addEventListener('click', () => void this.clearModelCache());
     this.saveSettingsBtn.addEventListener('click', () => void this.saveSettingsHandler());
 
     this.modelSelect.addEventListener('change', () => this.onModelSelectionChanged());
@@ -278,6 +327,12 @@ class ChatApp {
 
     this.settingsModal.addEventListener('click', (e) => {
       if (e.target === this.settingsModal) this.closeSettings();
+    });
+    this.webgpuHelpModal.addEventListener('click', (e) => {
+      if (e.target === this.webgpuHelpModal) this.closeWebgpuHelp();
+    });
+    this.modelCacheModal.addEventListener('click', (e) => {
+      if (e.target === this.modelCacheModal) this.closeModelCache();
     });
 
     this.messageInput.addEventListener('keydown', (e) => {
@@ -493,12 +548,25 @@ class ChatApp {
   private async checkWebGPU() {
     this.gpu = await detectGpu();
     if (this.gpu.available) {
-      this.webgpuStatus.textContent = 'WebGPU: ready';
-      this.webgpuStatus.className = 'text-ink-500';
-      this.webgpuWarning.classList.add('hidden');
+      if (this.gpu.fallbackAdapter) {
+        this.webgpuStatus.textContent = 'WebGPU: fallback adapter';
+        this.webgpuStatus.className = 'text-accent';
+        this.webgpuWarningTitle.textContent = 'Chrome is using the WebGPU software fallback';
+        this.webgpuWarningMessage.textContent =
+          'The app can run, but SwiftShader usually caps buffers at 1 GB and is much slower than your real GPU. On Linux / AMD, enable Unsafe WebGPU and Vulkan in chrome://flags. If video sites show a white player, try ANGLE OpenGL and Zero-copy rasterizer off before disabling only Hardware-accelerated video decode.';
+        this.webgpuWarning.classList.remove('hidden');
+      } else {
+        this.webgpuStatus.textContent = 'WebGPU: ready';
+        this.webgpuStatus.className = 'text-ink-500';
+        this.webgpuWarning.classList.add('hidden');
+      }
     } else {
       this.webgpuStatus.textContent = 'WebGPU: unavailable';
       this.webgpuStatus.className = 'text-accent';
+      this.webgpuWarningTitle.textContent = 'WebGPU is not available in this browser';
+      this.webgpuWarningMessage.textContent = this.gpu.secureContext
+        ? "This app runs AI models locally via WebGPU. Without it, model inference won't work."
+        : 'This page is not a secure context. Open the https:// URL and clear site data if Chrome still marks it insecure.';
       this.webgpuWarning.classList.remove('hidden');
     }
     this.renderHardware();
@@ -511,10 +579,22 @@ class ChatApp {
   }
 
   private renderHardware() {
-    const { available, vendor, architecture, description, shaderF16, maxBufferBytes, maxStorageBufferBindingBytes } = this.gpu;
+    const {
+      available,
+      secureContext,
+      fallbackAdapter,
+      vendor,
+      architecture,
+      description,
+      shaderF16,
+      maxBufferBytes,
+      maxStorageBufferBindingBytes,
+    } = this.gpu;
     if (!available) {
       this.gpuShaderF16El.textContent = '';
-      this.gpuInfoEl.textContent = 'WebGPU not available in this browser.';
+      this.gpuInfoEl.textContent = secureContext
+        ? 'WebGPU not available in this browser.'
+        : 'This page is not a secure context. Open the https:// URL and clear site data if Chrome still marks it insecure.';
       return;
     }
     this.gpuShaderF16El.textContent = shaderF16 ? 'shader-f16 ✓' : 'shader-f16 ✗';
@@ -524,6 +604,16 @@ class ChatApp {
     const adapterLine = document.createElement('div');
     adapterLine.className = 'truncate';
     adapterLine.textContent = labelParts || 'Adapter info hidden by browser';
+
+    const securityLine = document.createElement('div');
+    securityLine.className = secureContext ? 'text-ink-500' : 'text-accent';
+    securityLine.textContent = secureContext ? 'Secure context: yes' : 'Secure context: no';
+
+    const fallbackLine = document.createElement('div');
+    fallbackLine.className = fallbackAdapter ? 'text-accent' : 'text-ink-500';
+    fallbackLine.textContent = fallbackAdapter
+      ? 'Software fallback adapter: yes (SwiftShader)'
+      : 'Software fallback adapter: no';
 
     const bufferLine = document.createElement('div');
     const bufferValue = document.createElement('span');
@@ -537,11 +627,219 @@ class ChatApp {
     storageValue.textContent = formatBytes(maxStorageBufferBindingBytes);
     storageLine.append('Max storage binding: ', storageValue);
 
-    this.gpuInfoEl.replaceChildren(adapterLine, bufferLine, storageLine);
+    this.gpuInfoEl.replaceChildren(securityLine, adapterLine, fallbackLine, bufferLine, storageLine);
+  }
+
+  private openWebgpuHelp() {
+    this.webgpuHelpModal.classList.remove('hidden');
+  }
+
+  private closeWebgpuHelp() {
+    this.webgpuHelpModal.classList.add('hidden');
+  }
+
+  private async openModelCache() {
+    this.modelCacheModal.classList.remove('hidden');
+    await this.refreshModelCache();
+  }
+
+  private closeModelCache() {
+    this.modelCacheModal.classList.add('hidden');
+  }
+
+  private formatStorageBytes(bytes?: number): string {
+    if (bytes === undefined) return 'unknown';
+    if (bytes === 0) return '0 MB';
+    return formatBytes(bytes);
+  }
+
+  private formatModelCacheSize(model: CachedModel): string {
+    if (model.totalBytes === 0 && model.hasUnknownBytes) return 'unknown';
+    const knownSize = this.formatStorageBytes(model.totalBytes);
+    return model.hasUnknownBytes ? `${knownSize}+` : knownSize;
+  }
+
+  private async refreshModelCache() {
+    this.refreshModelCacheBtn.disabled = true;
+    this.modelCacheSummary.textContent = 'Scanning browser cache...';
+    this.modelCacheList.textContent = '';
+
+    try {
+      const [models, storage] = await Promise.all([
+        listDownloadedModels(),
+        estimateStorage(),
+      ]);
+      this.renderModelCacheList(models);
+
+      const modelBytes = models.reduce((sum, model) => sum + model.totalBytes, 0);
+      const modelCount = models.length === 1 ? '1 model' : `${models.length} models`;
+      const modelSummary = `${modelCount} · ${this.formatStorageBytes(modelBytes)} cached model data`;
+      const storageSummary = storage?.usageBytes
+        ? ` · origin storage ${this.formatStorageBytes(storage.usageBytes)} / ${this.formatStorageBytes(storage.quotaBytes)}`
+        : '';
+      this.modelCacheSummary.textContent = `${modelSummary}${storageSummary}`;
+      this.clearModelCacheBtn.disabled = models.length === 0;
+      this.clearModelCacheBtn.className = models.length === 0
+        ? 'text-[12px] text-ink-400 cursor-not-allowed transition-colors'
+        : 'text-[12px] text-accent hover:text-accent-hover transition-colors';
+    } catch (error) {
+      console.error('Failed to inspect model cache:', error);
+      this.modelCacheSummary.textContent = 'Could not read the browser model cache.';
+      this.modelCacheList.textContent = '';
+    } finally {
+      this.refreshModelCacheBtn.disabled = false;
+    }
+  }
+
+  private renderModelCacheList(models: CachedModel[]) {
+    if (models.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'border border-cream-200 rounded-lg bg-cream-100/40 p-4 text-sm text-ink-500';
+      empty.textContent = 'No downloaded Hugging Face model files found in the browser cache.';
+      this.modelCacheList.replaceChildren(empty);
+      return;
+    }
+
+    const cards = models.map((model) => {
+      const info = findModel(model.modelId);
+      const card = document.createElement('div');
+      card.className = 'border border-cream-200 rounded-lg bg-cream-100/40 p-4';
+
+      const header = document.createElement('div');
+      header.className = 'flex items-start justify-between gap-4';
+
+      const titleWrap = document.createElement('div');
+      titleWrap.className = 'min-w-0';
+
+      const title = document.createElement('div');
+      title.className = 'text-sm font-medium text-ink-800 truncate';
+      title.textContent = info?.label ?? model.modelId;
+
+      const meta = document.createElement('div');
+      meta.className = 'text-[12px] text-ink-500 mt-0.5 truncate';
+      meta.textContent = `${model.modelId} · ${model.files.length} files · ${this.formatModelCacheSize(model)}`;
+
+      titleWrap.append(title, meta);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'flex-shrink-0 text-[12px] text-accent hover:text-accent-hover transition-colors';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.addEventListener('click', () => void this.deleteCachedModel(model.modelId));
+
+      const loadBtn = document.createElement('button');
+      loadBtn.type = 'button';
+      loadBtn.className = 'flex-shrink-0 text-[12px] text-ink-600 hover:text-ink-900 transition-colors';
+      const loadedHere = this.model.loaded && this.model.name === model.modelId;
+      loadBtn.textContent = loadedHere ? 'Loaded' : this.model.loading ? 'Loading' : 'Load';
+      loadBtn.disabled = loadedHere || this.model.loading;
+      loadBtn.addEventListener('click', () => void this.loadCachedModel(model.modelId));
+
+      const actions = document.createElement('div');
+      actions.className = 'flex flex-shrink-0 items-center gap-3';
+      actions.append(loadBtn, deleteBtn);
+
+      header.append(titleWrap, actions);
+
+      const details = document.createElement('details');
+      details.className = 'mt-3';
+
+      const summary = document.createElement('summary');
+      summary.className = 'text-[12px] text-ink-500 hover:text-ink-700 cursor-pointer select-none';
+      summary.textContent = 'Files';
+
+      const fileList = document.createElement('div');
+      fileList.className = 'mt-2 space-y-1';
+
+      for (const file of model.files) {
+        const row = document.createElement('div');
+        row.className = 'flex items-baseline justify-between gap-3 text-[11px] text-ink-500';
+
+        const name = document.createElement('span');
+        name.className = 'font-mono truncate';
+        name.textContent = file.file;
+
+        const size = document.createElement('span');
+        size.className = 'font-mono flex-shrink-0 text-ink-400';
+        size.textContent = this.formatStorageBytes(file.sizeBytes);
+
+        row.append(name, size);
+        fileList.appendChild(row);
+      }
+
+      details.append(summary, fileList);
+      card.append(header, details);
+      return card;
+    });
+
+    this.modelCacheList.replaceChildren(...cards);
+  }
+
+  private async deleteCachedModel(modelId: string) {
+    const label = findModel(modelId)?.label ?? modelId;
+    if (!window.confirm(`Delete downloaded files for ${label}? The model will download again next time you load it.`)) return;
+
+    if (this.model.loaded && this.model.name === modelId) {
+      await this.model.unload();
+      this.updateModelStatus();
+    }
+
+    this.modelCacheSummary.textContent = `Deleting ${label}...`;
+    await deleteDownloadedModel(modelId);
+    await this.refreshModelCache();
+  }
+
+  private async loadCachedModel(modelId: string) {
+    if (this.model.loading) return;
+    const info = findModel(modelId);
+    const previous = this.settings.modelSettings[modelId];
+    const dtype = previous?.dtype ?? (info ? 'auto' : this.settings.dtype);
+    const generation = previous?.generation ?? (info ? this.defaultSettingsForModel(info).generation : this.settings.generation);
+
+    saveSettings({
+      ...this.settings,
+      modelId,
+      dtype,
+      generation,
+      modelSettings: {
+        ...this.settings.modelSettings,
+        [modelId]: {
+          dtype,
+          generation,
+        },
+      },
+    });
+    this.settings = loadSettings();
+
+    if (this.model.loaded || this.model.loading) {
+      await this.model.unload();
+    }
+
+    this.updateModelStatus();
+    this.closeModelCache();
+    void this.loadModel();
+  }
+
+  private async clearModelCache() {
+    if (!window.confirm('Delete all downloaded model files? Models will download again when loaded.')) return;
+
+    if (this.model.loaded) {
+      await this.model.unload();
+      this.updateModelStatus();
+    }
+
+    this.clearModelCacheBtn.disabled = true;
+    this.modelCacheSummary.textContent = 'Deleting downloaded models...';
+    await clearDownloadedModels();
+    await this.refreshModelCache();
   }
 
   private formatCount(value: number): string {
     return Math.round(value).toLocaleString('en-US');
+  }
+
+  private displayModelName(modelId: string): string {
+    return findModel(modelId)?.label ?? modelId.split('/').pop() ?? modelId;
   }
 
   private estimateTextTokens(text: string): number {
@@ -602,6 +900,13 @@ class ChatApp {
     this.compactContextBtn.textContent = this.isCompacting ? 'Compacting...' : 'Compact';
   }
 
+  private updateExportButton() {
+    const thread = this.getCurrentThread();
+    const canExport = Boolean(thread && thread.messages.length > 0);
+    this.exportChatBtn.disabled = !canExport;
+    this.exportChatBtn.title = canExport ? 'Export this chat as Markdown' : 'No messages to export yet';
+  }
+
   private updateConversationContextMeter() {
     const thread = this.getCurrentThread();
     const maxTokens = Math.max(1, this.settings.generation.contextTokens);
@@ -617,6 +922,7 @@ class ChatApp {
     this.chatContextMeter.setAttribute('aria-valuenow', String(Math.min(usedTokens, maxTokens)));
     this.chatContextMeter.title = title;
     this.updateCompactContextButton();
+    this.updateExportButton();
   }
 
   private setMeter(
@@ -937,9 +1243,17 @@ class ChatApp {
       saveThreads(this.threads);
       this.switchThread(thread.id);
     } else {
-      this.switchThread(this.threads[0].id);
+      this.switchThread(this.orderedThreads()[0].id);
     }
     this.renderThreadList();
+  }
+
+  private orderedThreads(): ChatThread[] {
+    return [...this.threads].sort((a, b) => {
+      const favoriteDelta = Number(Boolean(b.favorite)) - Number(Boolean(a.favorite));
+      if (favoriteDelta !== 0) return favoriteDelta;
+      return b.updatedAt - a.updatedAt;
+    });
   }
 
   private startNewChat() {
@@ -967,11 +1281,26 @@ class ChatApp {
   private renderThreadList() {
     this.threadList.innerHTML = '';
 
-    for (const thread of this.threads) {
+    for (const thread of this.orderedThreads()) {
       const row = document.createElement('div');
       row.className = `group flex items-center gap-1 rounded-md transition-colors ${
         thread.id === this.currentThreadId ? 'bg-cream-200' : 'hover:bg-cream-200/60'
       }`;
+
+      const favorite = document.createElement('button');
+      favorite.className = `flex-shrink-0 ml-1 p-1 rounded transition-colors ${
+        thread.favorite
+          ? 'text-accent hover:text-accent-hover'
+          : 'text-ink-400 opacity-0 group-hover:opacity-100 hover:text-accent'
+      }`;
+      favorite.title = thread.favorite ? 'Unfavorite chat' : 'Favorite chat';
+      favorite.setAttribute('aria-label', favorite.title);
+      favorite.innerHTML =
+        `<svg class="w-3.5 h-3.5" ${thread.favorite ? 'fill="currentColor"' : 'fill="none"'} stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.48 3.5c.2-.5.84-.5 1.04 0l2.25 5.42 5.85.47c.54.04.74.71.33 1.06l-4.46 3.82 1.36 5.72c.13.52-.42.93-.88.65L12 17.57l-4.97 3.07c-.46.28-1.01-.13-.88-.65l1.36-5.72-4.46-3.82c-.41-.35-.21-1.02.33-1.06l5.85-.47 2.25-5.42z"/></svg>`;
+      favorite.onclick = (e) => {
+        e.stopPropagation();
+        this.toggleThreadFavorite(thread.id);
+      };
 
       const title = document.createElement('button');
       title.className = `flex-1 min-w-0 text-left px-3 py-1.5 text-[13px] truncate ${
@@ -992,10 +1321,19 @@ class ChatApp {
         this.deleteThread(thread.id);
       };
 
+      row.appendChild(favorite);
       row.appendChild(title);
       row.appendChild(del);
       this.threadList.appendChild(row);
     }
+  }
+
+  private toggleThreadFavorite(threadId: string) {
+    const thread = this.threads.find((t) => t.id === threadId);
+    if (!thread) return;
+    thread.favorite = !thread.favorite;
+    saveThreads(this.threads);
+    this.renderThreadList();
   }
 
   private deleteThread(threadId: string) {
@@ -1013,7 +1351,7 @@ class ChatApp {
     } else {
       saveThreads(this.threads);
       if (this.currentThreadId === threadId) {
-        this.switchThread(this.threads[0].id);
+        this.switchThread(this.orderedThreads()[0].id);
       }
     }
     this.renderThreadList();
@@ -1051,9 +1389,12 @@ class ChatApp {
     wrapper.className = isUser ? 'flex justify-end' : 'flex justify-start';
     wrapper.dataset.messageId = msg.id;
 
+    const shell = document.createElement('div');
+    shell.className = isUser ? 'flex max-w-[85%] flex-col items-end gap-1' : 'flex w-full flex-col items-start gap-1';
+
     const bubble = document.createElement('div');
     if (isUser) {
-      bubble.className = 'max-w-[85%] bg-cream-100 border border-cream-200 text-ink-900 rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap';
+      bubble.className = 'bg-cream-100 border border-cream-200 text-ink-900 rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap';
       bubble.textContent = msg.content;
     } else {
       bubble.className = 'w-full prose-chat';
@@ -1062,9 +1403,91 @@ class ChatApp {
       this.addCopyButtons(bubble);
     }
 
-    wrapper.appendChild(bubble);
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'text-[11px] text-ink-400 hover:text-accent transition-colors';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', () => void this.copyMessage(msg, copyBtn));
+
+    shell.append(bubble, copyBtn);
+    wrapper.appendChild(shell);
     (this.messagesContainer ?? this.chatMessages).appendChild(wrapper);
     return bubble;
+  }
+
+  private async copyText(text: string): Promise<void> {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {
+        /* Fall back to the legacy copy path below. */
+      }
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    textarea.remove();
+  }
+
+  private async copyMessage(message: Message, button: HTMLButtonElement) {
+    await this.copyText(message.content);
+    button.textContent = 'Copied';
+    setTimeout(() => {
+      button.textContent = 'Copy';
+    }, 1500);
+  }
+
+  private safeFilename(value: string): string {
+    const cleaned = value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return cleaned || 'chat';
+  }
+
+  private formatThreadAsMarkdown(thread: ChatThread): string {
+    const lines = [
+      `# ${thread.title}`,
+      '',
+      `Exported: ${new Date().toISOString()}`,
+      `Created: ${new Date(thread.createdAt).toISOString()}`,
+      `Updated: ${new Date(thread.updatedAt).toISOString()}`,
+      '',
+    ];
+
+    for (const message of thread.messages) {
+      lines.push(`## ${message.role === 'user' ? 'User' : 'Assistant'}`);
+      lines.push('');
+      lines.push(message.content.trim() || '[empty]');
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
+  private exportCurrentThread() {
+    const thread = this.getCurrentThread();
+    if (!thread || thread.messages.length === 0) return;
+
+    const markdown = this.formatThreadAsMarkdown(thread);
+    const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const date = new Date().toISOString().slice(0, 10);
+    link.href = url;
+    link.download = `${this.safeFilename(thread.title)}-${date}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }
 
   private addCopyButtons(container: HTMLElement) {
@@ -1079,7 +1502,7 @@ class ChatApp {
       copyBtn.textContent = 'Copy';
       copyBtn.onclick = async () => {
         const code = pre.querySelector('code')?.textContent || '';
-        await navigator.clipboard.writeText(code);
+        await this.copyText(code);
         copyBtn.textContent = 'Copied!';
         setTimeout(() => (copyBtn.textContent = 'Copy'), 2000);
       };
@@ -1154,7 +1577,8 @@ class ChatApp {
   private updateModelStatus() {
     const baseBtn = 'px-3 py-1.5 text-[13px] rounded-md transition-colors';
     if (this.model.loaded) {
-      this.modelStatus.textContent = this.model.dtype ? `${this.model.name} (${this.model.dtype})` : this.model.name;
+      const name = this.displayModelName(this.model.name);
+      this.modelStatus.textContent = this.model.dtype ? `${name} (${this.model.dtype})` : name;
       this.modelStatus.className = 'text-ink-700 truncate';
       this.downloadModelBtn.disabled = true;
       this.downloadModelBtn.textContent = 'Loaded';
@@ -1165,7 +1589,7 @@ class ChatApp {
     const dtype = this.resolveDtypeForLoad();
     const blocked = this.getLoadBlockReason(this.settings.modelId.trim(), dtype);
     if (blocked) {
-      this.modelStatus.textContent = `Not compatible: ${this.settings.modelId}`;
+      this.modelStatus.textContent = `Not compatible: ${this.displayModelName(this.settings.modelId)}`;
       this.modelStatus.className = 'text-accent truncate';
       this.downloadModelBtn.disabled = true;
       this.downloadModelBtn.textContent = 'Not compatible';
@@ -1173,7 +1597,7 @@ class ChatApp {
       return;
     }
 
-    this.modelStatus.textContent = `Selected: ${this.settings.modelId}`;
+    this.modelStatus.textContent = `Selected: ${this.displayModelName(this.settings.modelId)}`;
     this.modelStatus.className = 'text-ink-400 truncate';
     this.downloadModelBtn.disabled = false;
     this.downloadModelBtn.textContent = 'Load model';
@@ -1189,21 +1613,24 @@ class ChatApp {
     const blocked = this.getLoadBlockReason(modelId, dtype);
 
     this.modelLoader.classList.remove('hidden');
-    this.loadingModelDetails.textContent = `Loading ${modelId} (${dtype}). This may take a few minutes on first load.`;
+    this.loadingModelDetails.textContent = `Loading ${this.displayModelName(modelId)} (${dtype}). This may take a few minutes on first load.`;
     this.progressBar.style.width = '0%';
     this.progressFile.textContent = '';
     this.progressText.textContent = 'Initializing...';
-    this.modelStatus.textContent = `Loading: ${modelId}`;
+    this.modelStatus.textContent = `Loading: ${this.displayModelName(modelId)}`;
     this.modelStatus.className = 'text-accent truncate';
     this.downloadModelBtn.disabled = true;
 
     if (blocked) {
       this.progressText.textContent = blocked;
       this.loadingModelDetails.textContent = blocked;
-      this.modelStatus.textContent = `Not compatible: ${modelId}`;
+      this.modelStatus.textContent = `Not compatible: ${this.displayModelName(modelId)}`;
       this.modelStatus.className = 'text-accent truncate';
       this.downloadModelBtn.textContent = 'Not compatible';
       this.downloadModelBtn.disabled = true;
+      setTimeout(() => {
+        this.modelLoader.classList.add('hidden');
+      }, 3000);
       return;
     }
 
@@ -1242,7 +1669,7 @@ class ChatApp {
       }
     } catch (error) {
       console.error('Failed to load model:', error);
-      this.modelStatus.textContent = `Load failed: ${modelId}`;
+      this.modelStatus.textContent = `Load failed: ${this.displayModelName(modelId)}`;
       this.modelStatus.className = 'text-accent truncate';
       this.downloadModelBtn.textContent = 'Retry';
       this.downloadModelBtn.disabled = false;

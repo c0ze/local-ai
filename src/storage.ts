@@ -13,6 +13,7 @@ export interface ChatThread {
   messages: Message[];
   createdAt: number;
   updatedAt: number;
+  favorite?: boolean;
 }
 
 const STORAGE_KEY = 'local-ai-chat-threads';
@@ -41,7 +42,8 @@ function isThread(value: unknown): value is ChatThread {
     Array.isArray(thread.messages) &&
     thread.messages.every(isMessage) &&
     typeof thread.createdAt === 'number' &&
-    typeof thread.updatedAt === 'number'
+    typeof thread.updatedAt === 'number' &&
+    (thread.favorite === undefined || typeof thread.favorite === 'boolean')
   );
 }
 
@@ -71,6 +73,7 @@ export function createThread(): ChatThread {
     messages: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    favorite: false,
   };
 }
 

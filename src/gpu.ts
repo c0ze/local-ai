@@ -1,5 +1,7 @@
 export interface GpuCapability {
   available: boolean;
+  secureContext: boolean;
+  fallbackAdapter: boolean;
   vendor?: string;
   architecture?: string;
   description?: string;
@@ -12,16 +14,25 @@ export interface GpuCapability {
 interface WGAdapter {
   features: ReadonlySet<string>;
   limits: Record<string, number>;
-  info?: { vendor?: string; architecture?: string; description?: string; device?: string };
-  requestAdapterInfo?: () => Promise<{ vendor?: string; architecture?: string; description?: string }>;
+  info?: GPUAdapterInfoLike;
+  requestAdapterInfo?: () => Promise<GPUAdapterInfoLike>;
 }
 
 interface WGGpu {
   requestAdapter: (opts?: { powerPreference?: 'high-performance' | 'low-power' }) => Promise<WGAdapter | null>;
 }
 
+interface GPUAdapterInfoLike {
+  vendor?: string;
+  architecture?: string;
+  description?: string;
+  device?: string;
+  isFallbackAdapter?: boolean;
+}
+
 export async function detectGpu(): Promise<GpuCapability> {
-  const empty: GpuCapability = { available: false, shaderF16: false, features: [] };
+  const secureContext = typeof window === 'undefined' ? true : window.isSecureContext;
+  const empty: GpuCapability = { available: false, secureContext, fallbackAdapter: false, shaderF16: false, features: [] };
   if (typeof navigator === 'undefined' || !('gpu' in navigator)) return empty;
 
   const gpu = (navigator as Navigator & { gpu?: WGGpu }).gpu;
@@ -44,10 +55,19 @@ export async function detectGpu(): Promise<GpuCapability> {
     }
   }
 
+  const vendor = info?.vendor;
+  const architecture = info?.architecture;
+  const fallbackAdapter = Boolean(
+    info?.isFallbackAdapter ||
+      (vendor?.toLowerCase() === 'google' && architecture?.toLowerCase() === 'swiftshader')
+  );
+
   return {
     available: true,
-    vendor: info?.vendor,
-    architecture: info?.architecture,
+    secureContext,
+    fallbackAdapter,
+    vendor,
+    architecture,
     description: info?.description,
     shaderF16: adapter.features.has('shader-f16'),
     maxBufferBytes: adapter.limits.maxBufferSize,
