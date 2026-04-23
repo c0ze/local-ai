@@ -114,7 +114,6 @@ export interface ModelSpecificSettings {
 
 export interface AppSettings {
   modelId: string;
-  hfToken: string;
   generation: GenerationParams;
   dtype: Dtype;
   modelSettings: Record<string, ModelSpecificSettings>;
@@ -132,7 +131,6 @@ const VALID_DTYPES: Dtype[] = ['auto', 'q4f16', 'q4', 'q8', 'fp16', 'fp32'];
 
 export const DEFAULT_SETTINGS: AppSettings = {
   modelId: 'onnx-community/Qwen2.5-0.5B-Instruct',
-  hfToken: '',
   generation: { ...DEFAULT_GENERATION },
   dtype: 'auto',
   modelSettings: {},

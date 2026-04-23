@@ -1734,7 +1734,6 @@ class ChatApp {
 
     saveSettings({
       modelId,
-      hfToken: '',
       dtype,
       generation,
       modelSettings: {

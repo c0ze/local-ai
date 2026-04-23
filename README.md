@@ -186,7 +186,7 @@ Use **Compact** in the chat header to manually summarize older turns. Compaction
 | `onnx-community/deepseek-coder-1.3b-instruct-ONNX` | ~1.3B params | 1280 / 160 | Small DeepSeek coding model |
 | `onnx-community/DeepSeek-R1-Distill-Qwen-1.5B-ONNX` | ~1.5B params | 1536 / 192 | Reasoning-tuned DeepSeek distill; no public 4B WebGPU ONNX preset found |
 | `onnx-community/Qwen2.5-Coder-3B-Instruct` | ~3.1B params | 1024 / 128 | Larger Qwen coding model; multi-GB download |
-| `onnx-community/Qwen3-4B-ONNX` | ~4B params | 1024 / 128 | 4B Qwen model; q4f16 only, needs shader-f16 and >2 GB WebGPU buffers |
+| `onnx-community/Qwen3-4B-ONNX` | ~4B params | 1024 / 128 | 4B Qwen model; q4f16 only, needs shader-f16 and ~2 GB WebGPU buffers |
 | `microsoft/Phi-3-mini-4k-instruct-onnx-web` | ~3.8B params | 768 / 96 | Much larger; needs more GPU memory |
 | `onnx-community/gemma-4-E4B-it-ONNX` | ~4.5B effective params | 512 / 64 | Experimental text-only Gemma4 path; q4f16 is ~4.6 GB of ONNX external data |
 | `Xenova/distilgpt2` | ~82M params | 512 / 64 | Tiny, fast sanity-check model; not instruction-tuned |
