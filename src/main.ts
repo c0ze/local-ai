@@ -1,0 +1,1572 @@
+import './style.css';
+import { marked } from 'marked';
+import hljs from 'highlight.js';
+import 'highlight.js/styles/atom-one-light.css';
+import { ModelManager } from './model';
+import {
+  ChatThread,
+  Message,
+  loadThreads,
+  saveThreads,
+  createThread,
+  deleteThread,
+  updateThreadTitle,
+  generateId,
+  loadSettings,
+  saveSettings,
+  DEFAULT_GENERATION,
+  type AppSettings,
+  type Dtype,
+  type GenerationParams,
+  type ModelSpecificSettings,
+} from './storage';
+import { detectGpu, formatBytes, type GpuCapability } from './gpu';
+import {
+  MODELS,
+  findModel,
+  evaluateDtype,
+  pickRunnableDtype,
+  type DtypeStatus,
+  type ModelInfo,
+} from './models';
+import {
+  loadTestResults,
+  clearTestResults,
+  runCompatibilityTests,
+  suggestedDtypeFromTests,
+  type TestResult,
+} from './tester';
+import { formatWebSearchContext, webSearch, type WebSearchResponse } from './webSearch';
+
+const CONTEXT_TOKEN_STOPS = [
+  256,
+  512,
+  768,
+  1024,
+  1280,
+  1536,
+  2048,
+  4096,
+  8192,
+  16384,
+  32768,
+  65536,
+  131072,
+];
+
+const MAX_NEW_TOKEN_STOPS = [
+  16,
+  32,
+  64,
+  96,
+  128,
+  160,
+  192,
+  256,
+  384,
+  512,
+  768,
+  1024,
+];
+
+class ChatApp {
+  private model = new ModelManager();
+  private threads: ChatThread[] = [];
+  private currentThreadId: string | null = null;
+  private isGenerating = false;
+  private isCompacting = false;
+  private webSearchEnabled = false;
+  private abortController: AbortController | null = null;
+  private settings: AppSettings = loadSettings();
+
+  private sidebar!: HTMLElement;
+  private threadList!: HTMLElement;
+  private chatMessages!: HTMLElement;
+  private chatContextMeter!: HTMLElement;
+  private chatContextMeterFill!: HTMLElement;
+  private messagesContainer: HTMLElement | null = null;
+  private messageInput!: HTMLTextAreaElement;
+  private webSearchBtn!: HTMLButtonElement;
+  private sendBtn!: HTMLButtonElement;
+  private newChatBtn!: HTMLButtonElement;
+  private toggleSidebarBtn!: HTMLButtonElement;
+  private modelLoader!: HTMLElement;
+  private loadingModelDetails!: HTMLElement;
+  private progressBar!: HTMLElement;
+  private progressText!: HTMLElement;
+  private progressFile!: HTMLElement;
+  private compactContextBtn!: HTMLButtonElement;
+  private downloadModelBtn!: HTMLButtonElement;
+  private modelStatus!: HTMLElement;
+  private webgpuStatus!: HTMLElement;
+  private currentThreadTitle!: HTMLElement;
+  private settingsBtn!: HTMLButtonElement;
+  private settingsModal!: HTMLElement;
+  private closeSettingsBtn!: HTMLButtonElement;
+  private saveSettingsBtn!: HTMLButtonElement;
+  private modelIdInput!: HTMLInputElement;
+  private webgpuWarning!: HTMLElement;
+  private dismissWebgpuWarningBtn!: HTMLButtonElement;
+  private temperatureInput!: HTMLInputElement;
+  private temperatureValue!: HTMLElement;
+  private topPInput!: HTMLInputElement;
+  private topPValue!: HTMLElement;
+  private maxTokensInput!: HTMLInputElement;
+  private maxTokensValue!: HTMLElement;
+  private maxTokensMin!: HTMLElement;
+  private maxTokensMax!: HTMLElement;
+  private maxTokenStopsDataList!: HTMLDataListElement;
+  private contextTokensInput!: HTMLInputElement;
+  private contextTokensValue!: HTMLElement;
+  private contextTokensMin!: HTMLElement;
+  private contextTokensMax!: HTMLElement;
+  private contextTokenStopsDataList!: HTMLDataListElement;
+  private repPenaltyInput!: HTMLInputElement;
+  private repPenaltyValue!: HTMLElement;
+  private resetParamsBtn!: HTMLButtonElement;
+  private dtypeSelect!: HTMLSelectElement;
+  private modelSelect!: HTMLSelectElement;
+  private modelMeta!: HTMLElement;
+  private dtypeHint!: HTMLElement;
+  private resourcePanel!: HTMLElement;
+  private contextUsageBar!: HTMLElement;
+  private contextUsageLabel!: HTMLElement;
+  private contextUsageDetail!: HTMLElement;
+  private vramUsageBar!: HTMLElement;
+  private vramUsageLabel!: HTMLElement;
+  private vramUsageDetail!: HTMLElement;
+  private gpuInfoEl!: HTMLElement;
+  private gpuShaderF16El!: HTMLElement;
+  private runTestsBtn!: HTMLButtonElement;
+  private cancelTestsBtn!: HTMLButtonElement;
+  private clearTestsBtn!: HTMLButtonElement;
+  private exhaustiveTestsCheckbox!: HTMLInputElement;
+  private testProgressEl!: HTMLElement;
+  private testResultsEl!: HTMLElement;
+
+  private gpu: GpuCapability = { available: false, shaderF16: false, features: [] };
+  private testResults: TestResult[] = loadTestResults();
+  private testAbort: AbortController | null = null;
+  private contextTokenStops = CONTEXT_TOKEN_STOPS.filter((value) => value <= 8192);
+  private maxNewTokenStops = MAX_NEW_TOKEN_STOPS;
+
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  private renderMarkdown(content: string): string {
+    return marked.parse(this.escapeHtml(content), { async: false }) as string;
+  }
+
+  constructor() {
+    this.initDOM();
+    this.initEvents();
+    this.loadData();
+    this.updateModelStatus();
+    void this.checkWebGPU();
+  }
+
+  private initDOM() {
+    this.sidebar = document.getElementById('sidebar')!;
+    this.threadList = document.getElementById('thread-list')!;
+    this.chatMessages = document.getElementById('chat-messages')!;
+    this.chatContextMeter = document.getElementById('chat-context-meter')!;
+    this.chatContextMeterFill = document.getElementById('chat-context-meter-fill')!;
+    this.messageInput = document.getElementById('message-input') as HTMLTextAreaElement;
+    this.sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
+    this.newChatBtn = document.getElementById('new-chat-btn') as HTMLButtonElement;
+    this.toggleSidebarBtn = document.getElementById('toggle-sidebar') as HTMLButtonElement;
+    this.modelLoader = document.getElementById('model-loader')!;
+    this.loadingModelDetails = document.getElementById('loading-model-details')!;
+    this.progressBar = document.getElementById('progress-bar')!;
+    this.progressText = document.getElementById('progress-text')!;
+    this.progressFile = document.getElementById('progress-file')!;
+    this.compactContextBtn = document.getElementById('compact-context-btn') as HTMLButtonElement;
+    this.downloadModelBtn = document.getElementById('download-model-btn') as HTMLButtonElement;
+    this.modelStatus = document.getElementById('model-status')!;
+    this.webgpuStatus = document.getElementById('webgpu-status')!;
+    this.currentThreadTitle = document.getElementById('current-thread-title')!;
+    this.settingsBtn = document.getElementById('settings-btn') as HTMLButtonElement;
+    this.settingsModal = document.getElementById('settings-modal')!;
+    this.closeSettingsBtn = document.getElementById('close-settings') as HTMLButtonElement;
+    this.saveSettingsBtn = document.getElementById('save-settings') as HTMLButtonElement;
+    this.modelIdInput = document.getElementById('model-id-input') as HTMLInputElement;
+    this.webgpuWarning = document.getElementById('webgpu-warning')!;
+    this.dismissWebgpuWarningBtn = document.getElementById('dismiss-webgpu-warning') as HTMLButtonElement;
+    this.temperatureInput = document.getElementById('temperature-input') as HTMLInputElement;
+    this.temperatureValue = document.getElementById('temperature-value')!;
+    this.topPInput = document.getElementById('top-p-input') as HTMLInputElement;
+    this.topPValue = document.getElementById('top-p-value')!;
+    this.maxTokensInput = document.getElementById('max-tokens-input') as HTMLInputElement;
+    this.maxTokensValue = document.getElementById('max-tokens-value')!;
+    this.maxTokensMin = document.getElementById('max-tokens-min')!;
+    this.maxTokensMax = document.getElementById('max-tokens-max')!;
+    this.maxTokenStopsDataList = document.getElementById('max-token-stops') as HTMLDataListElement;
+    this.contextTokensInput = document.getElementById('context-tokens-input') as HTMLInputElement;
+    this.contextTokensValue = document.getElementById('context-tokens-value')!;
+    this.contextTokensMin = document.getElementById('context-tokens-min')!;
+    this.contextTokensMax = document.getElementById('context-tokens-max')!;
+    this.contextTokenStopsDataList = document.getElementById('context-token-stops') as HTMLDataListElement;
+    this.repPenaltyInput = document.getElementById('rep-penalty-input') as HTMLInputElement;
+    this.repPenaltyValue = document.getElementById('rep-penalty-value')!;
+    this.resetParamsBtn = document.getElementById('reset-params-btn') as HTMLButtonElement;
+    this.dtypeSelect = document.getElementById('dtype-select') as HTMLSelectElement;
+    this.modelSelect = document.getElementById('model-select') as HTMLSelectElement;
+    this.modelMeta = document.getElementById('model-meta')!;
+    this.dtypeHint = document.getElementById('dtype-hint')!;
+    this.resourcePanel = document.getElementById('resource-panel')!;
+    this.contextUsageBar = document.getElementById('context-usage-bar')!;
+    this.contextUsageLabel = document.getElementById('context-usage-label')!;
+    this.contextUsageDetail = document.getElementById('context-usage-detail')!;
+    this.vramUsageBar = document.getElementById('vram-usage-bar')!;
+    this.vramUsageLabel = document.getElementById('vram-usage-label')!;
+    this.vramUsageDetail = document.getElementById('vram-usage-detail')!;
+    this.gpuInfoEl = document.getElementById('gpu-info')!;
+    this.gpuShaderF16El = document.getElementById('gpu-shader-f16')!;
+    this.runTestsBtn = document.getElementById('run-tests-btn') as HTMLButtonElement;
+    this.cancelTestsBtn = document.getElementById('cancel-tests-btn') as HTMLButtonElement;
+    this.clearTestsBtn = document.getElementById('clear-tests-btn') as HTMLButtonElement;
+    this.exhaustiveTestsCheckbox = document.getElementById('exhaustive-tests') as HTMLInputElement;
+    this.testProgressEl = document.getElementById('test-progress')!;
+    this.testResultsEl = document.getElementById('test-results')!;
+    this.webSearchBtn = document.getElementById('web-search-btn') as HTMLButtonElement;
+
+    this.populateModelSelect();
+    this.updateWebSearchButton();
+  }
+
+  private populateModelSelect() {
+    this.modelSelect.innerHTML = '';
+    for (const m of MODELS) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = `${m.label} — ${m.paramsB.toFixed(2)}B`;
+      this.modelSelect.appendChild(opt);
+    }
+    const customOpt = document.createElement('option');
+    customOpt.value = '__custom__';
+    customOpt.textContent = '— Custom (use field below) —';
+    this.modelSelect.appendChild(customOpt);
+  }
+
+  private initEvents() {
+    this.newChatBtn.addEventListener('click', () => this.startNewChat());
+    this.toggleSidebarBtn.addEventListener('click', () => this.toggleSidebar());
+    this.compactContextBtn.addEventListener('click', () => void this.compactCurrentThread());
+    this.downloadModelBtn.addEventListener('click', () => this.loadModel());
+    this.webSearchBtn.addEventListener('click', () => this.toggleWebSearch());
+    this.sendBtn.addEventListener('click', () => this.sendMessage());
+    this.settingsBtn.addEventListener('click', () => this.openSettings());
+    this.closeSettingsBtn.addEventListener('click', () => this.closeSettings());
+    this.saveSettingsBtn.addEventListener('click', () => void this.saveSettingsHandler());
+
+    this.modelSelect.addEventListener('change', () => this.onModelSelectionChanged());
+    this.modelIdInput.addEventListener('input', () => this.onCustomModelIdInput());
+    this.dtypeSelect.addEventListener('change', () => {
+      this.refreshDtypeHint();
+      this.refreshResourceBars();
+    });
+
+    this.runTestsBtn.addEventListener('click', () => void this.runTests());
+    this.cancelTestsBtn.addEventListener('click', () => this.cancelTests());
+    this.clearTestsBtn.addEventListener('click', () => this.clearTests());
+
+    this.settingsModal.addEventListener('click', (e) => {
+      if (e.target === this.settingsModal) this.closeSettings();
+    });
+
+    this.messageInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        this.sendMessage();
+      }
+    });
+
+    this.dismissWebgpuWarningBtn.addEventListener('click', () => {
+      this.webgpuWarning.classList.add('hidden');
+    });
+
+    this.messageInput.addEventListener('input', () => {
+      this.messageInput.style.height = 'auto';
+      this.messageInput.style.height = Math.min(this.messageInput.scrollHeight, 160) + 'px';
+    });
+
+    this.temperatureInput.addEventListener('input', () => {
+      this.temperatureValue.textContent = Number(this.temperatureInput.value).toFixed(2);
+    });
+    this.topPInput.addEventListener('input', () => {
+      this.topPValue.textContent = Number(this.topPInput.value).toFixed(2);
+    });
+    this.repPenaltyInput.addEventListener('input', () => {
+      this.repPenaltyValue.textContent = Number(this.repPenaltyInput.value).toFixed(2);
+    });
+    this.maxTokensInput.addEventListener('input', () => {
+      this.updateMaxTokenSliderLabels();
+      this.refreshResourceBars();
+    });
+    this.contextTokensInput.addEventListener('input', () => {
+      this.updateContextSliderLabels();
+      this.refreshResourceBars();
+    });
+    this.resetParamsBtn.addEventListener('click', () => {
+      const info = findModel(this.modelSelect.value);
+      this.applyParamsToInputs(info?.generationDefaults ?? DEFAULT_GENERATION);
+    });
+  }
+
+  private contextStopsFor(info: ModelInfo | null): number[] {
+    const maxContext = info?.contextWindowTokens ?? 8192;
+    const stops = CONTEXT_TOKEN_STOPS.filter((value) => value <= maxContext);
+    if (!stops.includes(maxContext)) stops.push(maxContext);
+    return stops.sort((a, b) => a - b);
+  }
+
+  private maxNewTokenStopsFor(info: ModelInfo | null): number[] {
+    const maxByContext = Math.max(16, Math.min(1024, (info?.contextWindowTokens ?? 8192) - 256));
+    const stops = MAX_NEW_TOKEN_STOPS.filter((value) => value <= maxByContext);
+    if (!stops.includes(maxByContext)) stops.push(maxByContext);
+    return stops.sort((a, b) => a - b);
+  }
+
+  private nearestStopIndex(stops: number[], value: number): number {
+    let nearest = 0;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < stops.length; i++) {
+      const distance = Math.abs(stops[i] - value);
+      if (distance < nearestDistance) {
+        nearest = i;
+        nearestDistance = distance;
+      }
+    }
+    return nearest;
+  }
+
+  private nearestContextStopIndex(tokens: number): number {
+    return this.nearestStopIndex(this.contextTokenStops, tokens);
+  }
+
+  private contextTokensFromSlider(): number {
+    const index = Number.parseInt(this.contextTokensInput.value, 10);
+    const safeIndex = Number.isFinite(index)
+      ? Math.min(this.contextTokenStops.length - 1, Math.max(0, index))
+      : 0;
+    return this.contextTokenStops[safeIndex] ?? DEFAULT_GENERATION.contextTokens;
+  }
+
+  private maxNewTokensFromSlider(): number {
+    const index = Number.parseInt(this.maxTokensInput.value, 10);
+    const safeIndex = Number.isFinite(index)
+      ? Math.min(this.maxNewTokenStops.length - 1, Math.max(0, index))
+      : 0;
+    return this.maxNewTokenStops[safeIndex] ?? DEFAULT_GENERATION.maxNewTokens;
+  }
+
+  private updateMaxTokenSliderLabels() {
+    const value = this.maxNewTokensFromSlider();
+    const first = this.maxNewTokenStops[0] ?? 16;
+    const last = this.maxNewTokenStops[this.maxNewTokenStops.length - 1] ?? 1024;
+    this.maxTokensValue.textContent = this.formatCount(value);
+    this.maxTokensMin.textContent = this.formatCount(first);
+    this.maxTokensMax.textContent = this.formatCount(last);
+  }
+
+  private updateContextSliderLabels() {
+    const value = this.contextTokensFromSlider();
+    const first = this.contextTokenStops[0] ?? 256;
+    const last = this.contextTokenStops[this.contextTokenStops.length - 1] ?? 8192;
+    this.contextTokensValue.textContent = this.formatCount(value);
+    this.contextTokensMin.textContent = this.formatCount(first);
+    this.contextTokensMax.textContent = this.formatCount(last);
+  }
+
+  private setMaxTokenSliderValue(tokens: number) {
+    const info = findModel(this.modelSelect.value) ?? null;
+    this.maxNewTokenStops = this.maxNewTokenStopsFor(info);
+    this.maxTokensInput.min = '0';
+    this.maxTokensInput.max = String(Math.max(0, this.maxNewTokenStops.length - 1));
+    this.maxTokensInput.step = '1';
+    this.maxTokensInput.value = String(this.nearestStopIndex(this.maxNewTokenStops, tokens));
+
+    this.maxTokenStopsDataList.innerHTML = '';
+    for (let i = 0; i < this.maxNewTokenStops.length; i++) {
+      const option = document.createElement('option');
+      option.value = String(i);
+      option.label = this.formatCount(this.maxNewTokenStops[i]);
+      this.maxTokenStopsDataList.appendChild(option);
+    }
+
+    this.updateMaxTokenSliderLabels();
+  }
+
+  private setContextSliderValue(tokens: number) {
+    const info = findModel(this.modelSelect.value) ?? null;
+    this.contextTokenStops = this.contextStopsFor(info);
+    this.contextTokensInput.min = '0';
+    this.contextTokensInput.max = String(Math.max(0, this.contextTokenStops.length - 1));
+    this.contextTokensInput.step = '1';
+    this.contextTokensInput.value = String(this.nearestContextStopIndex(tokens));
+
+    this.contextTokenStopsDataList.innerHTML = '';
+    for (let i = 0; i < this.contextTokenStops.length; i++) {
+      const option = document.createElement('option');
+      option.value = String(i);
+      option.label = this.formatCount(this.contextTokenStops[i]);
+      this.contextTokenStopsDataList.appendChild(option);
+    }
+
+    this.updateContextSliderLabels();
+  }
+
+  private applyParamsToInputs(params: Partial<GenerationParams>) {
+    const merged = { ...DEFAULT_GENERATION, ...params };
+    this.temperatureInput.value = String(merged.temperature);
+    this.temperatureValue.textContent = merged.temperature.toFixed(2);
+    this.topPInput.value = String(merged.topP);
+    this.topPValue.textContent = merged.topP.toFixed(2);
+    this.setMaxTokenSliderValue(merged.maxNewTokens);
+    this.setContextSliderValue(merged.contextTokens);
+    this.repPenaltyInput.value = String(merged.repetitionPenalty);
+    this.repPenaltyValue.textContent = merged.repetitionPenalty.toFixed(2);
+    this.refreshResourceBars();
+  }
+
+  private savedSettingsForModel(modelId: string): ModelSpecificSettings | null {
+    return this.settings.modelSettings[modelId.trim()] ?? null;
+  }
+
+  private defaultSettingsForModel(info: ModelInfo): ModelSpecificSettings {
+    return {
+      dtype: pickRunnableDtype(info, this.gpu) ?? 'auto',
+      generation: { ...DEFAULT_GENERATION, ...info.generationDefaults },
+    };
+  }
+
+  private applyDtypeToSelect(dtype: Dtype, info: ModelInfo | null) {
+    if (this.dtypeSelect.querySelector(`option[value="${dtype}"]:not([disabled])`)) {
+      this.dtypeSelect.value = dtype;
+    } else if (info) {
+      const recommended = pickRunnableDtype(info, this.gpu);
+      this.dtypeSelect.value = recommended && this.dtypeSelect.querySelector(`option[value="${recommended}"]:not([disabled])`)
+        ? recommended
+        : 'auto';
+    } else {
+      this.dtypeSelect.value = 'auto';
+    }
+    this.refreshDtypeHint();
+  }
+
+  private applyModelSettingsToInputs(modelId: string, info: ModelInfo | null, preferred?: ModelSpecificSettings) {
+    const settings = preferred ?? this.savedSettingsForModel(modelId) ?? (info ? this.defaultSettingsForModel(info) : null);
+    if (!settings) {
+      this.applyParamsToInputs(DEFAULT_GENERATION);
+      this.applyDtypeToSelect('auto', info);
+      return;
+    }
+
+    this.applyParamsToInputs(settings.generation);
+    this.applyDtypeToSelect(settings.dtype, info);
+  }
+
+  private toggleWebSearch() {
+    if (this.isGenerating || this.isCompacting) return;
+    this.webSearchEnabled = !this.webSearchEnabled;
+    this.updateWebSearchButton();
+  }
+
+  private updateWebSearchButton() {
+    const active = this.webSearchEnabled;
+    this.webSearchBtn.disabled = this.isGenerating || this.isCompacting;
+    this.webSearchBtn.setAttribute('aria-pressed', String(active));
+    this.webSearchBtn.title = active
+      ? 'Web search is on. Your next prompt will be sent to DuckDuckGo.'
+      : 'Turn on web search for the next prompt.';
+    this.webSearchBtn.className = active
+      ? 'flex-shrink-0 p-1.5 rounded-md bg-cream-100 text-accent hover:text-accent-hover disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors'
+      : 'flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors';
+  }
+
+  private async checkWebGPU() {
+    this.gpu = await detectGpu();
+    if (this.gpu.available) {
+      this.webgpuStatus.textContent = 'WebGPU: ready';
+      this.webgpuStatus.className = 'text-ink-500';
+      this.webgpuWarning.classList.add('hidden');
+    } else {
+      this.webgpuStatus.textContent = 'WebGPU: unavailable';
+      this.webgpuStatus.className = 'text-accent';
+      this.webgpuWarning.classList.remove('hidden');
+    }
+    this.renderHardware();
+    if (!this.settingsModal.classList.contains('hidden')) {
+      const info = findModel(this.modelSelect.value);
+      this.populateDtypeOptions(info ?? null);
+      this.refreshResourceBars();
+    }
+    this.updateModelStatus();
+  }
+
+  private renderHardware() {
+    const { available, vendor, architecture, description, shaderF16, maxBufferBytes, maxStorageBufferBindingBytes } = this.gpu;
+    if (!available) {
+      this.gpuShaderF16El.textContent = '';
+      this.gpuInfoEl.textContent = 'WebGPU not available in this browser.';
+      return;
+    }
+    this.gpuShaderF16El.textContent = shaderF16 ? 'shader-f16 ✓' : 'shader-f16 ✗';
+    this.gpuShaderF16El.className = `text-[11px] font-mono ${shaderF16 ? 'text-ink-500' : 'text-accent'}`;
+
+    const labelParts = [vendor, architecture, description].filter(Boolean).join(' · ');
+    const adapterLine = document.createElement('div');
+    adapterLine.className = 'truncate';
+    adapterLine.textContent = labelParts || 'Adapter info hidden by browser';
+
+    const bufferLine = document.createElement('div');
+    const bufferValue = document.createElement('span');
+    bufferValue.className = 'font-mono text-ink-700';
+    bufferValue.textContent = formatBytes(maxBufferBytes);
+    bufferLine.append('Max buffer: ', bufferValue);
+
+    const storageLine = document.createElement('div');
+    const storageValue = document.createElement('span');
+    storageValue.className = 'font-mono text-ink-700';
+    storageValue.textContent = formatBytes(maxStorageBufferBindingBytes);
+    storageLine.append('Max storage binding: ', storageValue);
+
+    this.gpuInfoEl.replaceChildren(adapterLine, bufferLine, storageLine);
+  }
+
+  private formatCount(value: number): string {
+    return Math.round(value).toLocaleString('en-US');
+  }
+
+  private estimateTextTokens(text: string): number {
+    return Math.max(1, Math.ceil(text.length / 4));
+  }
+
+  private estimateMessageTokens(message: Message): number {
+    return 6 + this.estimateTextTokens(message.content);
+  }
+
+  private estimateThreadTokens(messages: Message[]): number {
+    if (messages.length === 0) return 0;
+    return 8 + messages.reduce((total, message) => total + this.estimateMessageTokens(message), 0);
+  }
+
+  private splitMessagesForCompaction(messages: Message[]): { toCompact: Message[]; toKeep: Message[] } {
+    if (messages.length <= 4) return { toCompact: [], toKeep: messages };
+
+    const keepBudget = Math.max(512, Math.floor(this.settings.generation.contextTokens * 0.35));
+    const toKeep: Message[] = [];
+    let used = 8;
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      const cost = this.estimateMessageTokens(message);
+      if (toKeep.length >= 4 && used + cost > keepBudget) break;
+      toKeep.unshift(message);
+      used += cost;
+    }
+
+    const keepCount = Math.min(messages.length - 2, Math.max(2, toKeep.length));
+    return {
+      toCompact: messages.slice(0, messages.length - keepCount),
+      toKeep: messages.slice(messages.length - keepCount),
+    };
+  }
+
+  private formatCompactionTranscript(messages: Message[]): string {
+    const transcript = messages
+      .map((message, index) => {
+        const role = message.role === 'user' ? 'User' : 'Assistant';
+        return `Turn ${index + 1} (${role}):\n${message.content.trim() || '[empty]'}`;
+      })
+      .join('\n\n---\n\n');
+
+    const maxChars = Math.max(4096, this.settings.generation.contextTokens * 4);
+    if (transcript.length <= maxChars) return transcript;
+
+    const marker = '\n\n[...middle omitted before summarization...]\n\n';
+    const sideChars = Math.max(1536, Math.floor((maxChars - marker.length) / 2));
+    return `${transcript.slice(0, sideChars)}${marker}${transcript.slice(-sideChars)}`;
+  }
+
+  private updateCompactContextButton() {
+    const thread = this.getCurrentThread();
+    const canCompact = Boolean(thread && thread.messages.length > 4 && !this.isGenerating && !this.isCompacting && !this.model.loading);
+    this.compactContextBtn.disabled = !canCompact;
+    this.compactContextBtn.textContent = this.isCompacting ? 'Compacting...' : 'Compact';
+  }
+
+  private updateConversationContextMeter() {
+    const thread = this.getCurrentThread();
+    const maxTokens = Math.max(1, this.settings.generation.contextTokens);
+    const usedTokens = thread ? this.estimateThreadTokens(thread.messages) : 0;
+    const ratio = usedTokens / maxTokens;
+    const percent = Math.min(100, Math.max(0, ratio * 100));
+    const hue = Math.max(0, Math.round(132 - Math.min(1, ratio) * 132));
+    const title = `Context estimate: ${this.formatCount(usedTokens)} / ${this.formatCount(maxTokens)} tokens`;
+
+    this.chatContextMeterFill.style.height = `${percent}%`;
+    this.chatContextMeterFill.style.backgroundColor = `hsl(${hue} 62% 40%)`;
+    this.chatContextMeter.setAttribute('aria-valuemax', String(maxTokens));
+    this.chatContextMeter.setAttribute('aria-valuenow', String(Math.min(usedTokens, maxTokens)));
+    this.chatContextMeter.title = title;
+    this.updateCompactContextButton();
+  }
+
+  private setMeter(
+    bar: HTMLElement,
+    label: HTMLElement,
+    current: number,
+    max: number | undefined,
+    currentText: string,
+    maxText: string,
+  ) {
+    const hasMax = max !== undefined && max > 0;
+    const percent = hasMax ? Math.min(100, Math.max(0, (current / max) * 100)) : 0;
+    const overLimit = hasMax && current > max;
+
+    bar.style.width = `${percent}%`;
+    bar.className = `h-full rounded-full transition-all duration-300 ${overLimit ? 'bg-accent' : 'bg-ink-600'}`;
+    label.textContent = hasMax ? `${currentText} / ${maxText}` : currentText;
+    label.className = `text-[12px] font-mono ${overLimit ? 'text-accent' : 'text-ink-700'}`;
+  }
+
+  private selectedDtypeForResource(info: ModelInfo): Exclude<Dtype, 'auto'> | null {
+    const selected = this.dtypeSelect.value as Dtype;
+    if (selected !== 'auto' && info.supportedDtypes.includes(selected)) return selected;
+    return pickRunnableDtype(info, this.gpu) ?? info.recommendedDtype;
+  }
+
+  private refreshResourceBars() {
+    const info = findModel(this.modelSelect.value);
+    if (!info) {
+      this.resourcePanel.classList.add('hidden');
+      return;
+    }
+
+    this.resourcePanel.classList.remove('hidden');
+
+    const promptTokens = this.contextTokensFromSlider();
+    const outputTokens = this.maxNewTokensFromSlider();
+    const safePromptTokens = Number.isFinite(promptTokens) ? promptTokens : info.generationDefaults.contextTokens;
+    const safeOutputTokens = Number.isFinite(outputTokens) ? outputTokens : info.generationDefaults.maxNewTokens;
+    const totalContextTokens = Math.max(0, safePromptTokens + safeOutputTokens);
+
+    this.setMeter(
+      this.contextUsageBar,
+      this.contextUsageLabel,
+      totalContextTokens,
+      info.contextWindowTokens,
+      this.formatCount(totalContextTokens),
+      this.formatCount(info.contextWindowTokens),
+    );
+    this.contextUsageDetail.textContent =
+      `${this.formatCount(safePromptTokens)} prompt + ${this.formatCount(safeOutputTokens)} output tokens`;
+
+    const dtype = this.selectedDtypeForResource(info);
+    if (!dtype) {
+      this.setMeter(this.vramUsageBar, this.vramUsageLabel, 0, undefined, 'unknown', '');
+      this.vramUsageDetail.textContent = 'No compatible dtype is available for this model on the detected adapter.';
+      return;
+    }
+
+    const weightsMb = info.approxWeightsMb[dtype];
+    const bufferMb = info.maxBufferRequirementMb?.[dtype] ?? weightsMb;
+    const maxBufferMb = this.gpu.maxBufferBytes ? this.gpu.maxBufferBytes / 1024 / 1024 : undefined;
+
+    if (bufferMb) {
+      this.setMeter(
+        this.vramUsageBar,
+        this.vramUsageLabel,
+        bufferMb,
+        maxBufferMb,
+        this.formatMb(bufferMb),
+        maxBufferMb ? this.formatMb(maxBufferMb) : '',
+      );
+    } else {
+      this.setMeter(this.vramUsageBar, this.vramUsageLabel, 0, maxBufferMb, 'unknown', maxBufferMb ? this.formatMb(maxBufferMb) : '');
+    }
+
+    const weightsText = weightsMb ? `~${this.formatMb(weightsMb)} ${dtype} weights` : `${dtype} weights unknown`;
+    const bufferText = bufferMb ? `largest buffer ~${this.formatMb(bufferMb)}` : 'largest buffer unknown';
+    const maxText = maxBufferMb ? `${this.formatMb(maxBufferMb)} WebGPU max buffer` : 'WebGPU max buffer not reported';
+    this.vramUsageDetail.textContent = `${weightsText}; ${bufferText} / ${maxText}`;
+  }
+
+  private onModelSelectionChanged() {
+    const value = this.modelSelect.value;
+    if (value === '__custom__') {
+      this.modelIdInput.focus();
+      this.modelMeta.textContent = 'Using the custom ID below.';
+      this.populateDtypeOptions(null);
+      this.refreshResourceBars();
+      return;
+    }
+    this.modelIdInput.value = '';
+    const info = findModel(value);
+    this.populateDtypeOptions(info ?? null);
+    if (info) {
+      this.applyModelSettingsToInputs(value, info);
+      this.renderModelMeta(info);
+      this.refreshResourceBars();
+    }
+  }
+
+  private onCustomModelIdInput() {
+    const id = this.modelIdInput.value.trim();
+    if (!id) return;
+    this.modelSelect.value = '__custom__';
+    this.modelMeta.textContent = 'Custom model — dtype auto-detected at load.';
+    this.populateDtypeOptions(null);
+    this.refreshResourceBars();
+  }
+
+  private renderModelMeta(info: ReturnType<typeof findModel>) {
+    if (!info) {
+      this.modelMeta.textContent = '';
+      return;
+    }
+    const passing = this.testResults
+      .filter((r) => r.modelId === info.id && r.status === 'ok')
+      .map((r) => r.dtype);
+    const tag = passing.length ? ` · tested ✓ ${passing.join(', ')}` : '';
+    const defaults = `default ${info.generationDefaults.contextTokens} ctx / ${info.generationDefaults.maxNewTokens} out`;
+    const window = `max ${this.formatCount(info.contextWindowTokens)} ctx`;
+    this.modelMeta.textContent = `${info.architecture} · ${info.paramsB.toFixed(2)}B params · ${window} · ${defaults}${tag}${info.notes ? ` · ${info.notes}` : ''}`;
+  }
+
+  private formatMb(value?: number): string {
+    if (!value) return '';
+    return value < 1024 ? `${value} MB` : `${(value / 1024).toFixed(2)} GB`;
+  }
+
+  private dtypeStatusMessage(
+    info: ModelInfo,
+    dtype: Exclude<Dtype, 'auto'>,
+    status: DtypeStatus,
+  ): string {
+    const sizeMb = info.approxWeightsMb[dtype];
+    const sizeStr = this.formatMb(sizeMb);
+    switch (status) {
+      case 'ok':
+        return sizeStr
+          ? `${sizeStr} of model weights. Compatible with detected hard WebGPU limits.`
+          : 'Compatible with detected hard WebGPU limits.';
+      case 'unsupported_by_model':
+        return 'This model does not ship in this dtype.';
+      case 'needs_shader_f16':
+        return 'Your GPU does not expose the shader-f16 feature.';
+      case 'too_large': {
+        const bufferMb = info.maxBufferRequirementMb?.[dtype];
+        const bufferStr = this.formatMb(bufferMb);
+        const maxBuffer = formatBytes(this.gpu.maxBufferBytes);
+        if (bufferStr) {
+          return `Needs a single GPU buffer around ${bufferStr}; this adapter allows ${maxBuffer}.`;
+        }
+        return `${sizeStr} exceeds this adapter's max buffer size (${maxBuffer}).`;
+      }
+    }
+  }
+
+  private populateDtypeOptions(info: ReturnType<typeof findModel> | null) {
+    const previous = this.dtypeSelect.value;
+    this.dtypeSelect.innerHTML = '';
+
+    const auto = document.createElement('option');
+    auto.value = 'auto';
+    auto.textContent = 'Auto (recommended)';
+    this.dtypeSelect.appendChild(auto);
+
+    const dtypes: Exclude<Dtype, 'auto'>[] = ['q4f16', 'q4', 'q8', 'fp16', 'fp32'];
+    for (const dtype of dtypes) {
+      const opt = document.createElement('option');
+      opt.value = dtype;
+
+      let suffix = '';
+      let disabled = false;
+      if (info) {
+        const status: DtypeStatus = evaluateDtype(info, dtype, this.gpu);
+        const sizeMb = info.approxWeightsMb[dtype];
+        const sizeStr = sizeMb ? ` · ~${sizeMb < 1024 ? `${sizeMb} MB` : `${(sizeMb / 1024).toFixed(2)} GB`}` : '';
+        if (status === 'unsupported_by_model') {
+          suffix = ' — not shipped for this model';
+          disabled = true;
+        } else if (status === 'needs_shader_f16') {
+          suffix = ' — needs shader-f16 (your GPU lacks it)';
+          disabled = true;
+        } else if (status === 'too_large') {
+          const bufferMb = info.maxBufferRequirementMb?.[dtype];
+          const bufferStr = this.formatMb(bufferMb);
+          const maxBuffer = formatBytes(this.gpu.maxBufferBytes);
+          suffix = bufferStr
+            ? `${sizeStr} — needs single buffer ~${bufferStr}; max ${maxBuffer}`
+            : `${sizeStr} — exceeds max buffer ${maxBuffer}`;
+          disabled = true;
+        } else {
+          suffix = sizeStr;
+        }
+      } else if ((dtype === 'q4f16' || dtype === 'fp16') && !this.gpu.shaderF16) {
+        suffix = ' — needs shader-f16 (your GPU lacks it)';
+        disabled = true;
+      }
+
+      opt.textContent = `${dtype}${suffix}`;
+      opt.disabled = disabled;
+      this.dtypeSelect.appendChild(opt);
+    }
+
+    if (this.dtypeSelect.querySelector(`option[value="${previous}"]:not([disabled])`)) {
+      this.dtypeSelect.value = previous;
+    } else {
+      this.dtypeSelect.value = 'auto';
+    }
+    this.refreshDtypeHint();
+  }
+
+  private refreshDtypeHint() {
+    const value = this.dtypeSelect.value as Dtype;
+    const info = findModel(this.modelSelect.value);
+    if (value === 'auto') {
+      if (!info) {
+        this.dtypeHint.textContent = 'Auto picks q4f16 if the GPU supports shader-f16, otherwise q4.';
+        return;
+      }
+      const runnable = pickRunnableDtype(info, this.gpu);
+      this.dtypeHint.textContent = runnable
+        ? `Auto picks ${runnable} for this model on this GPU.`
+        : `No shipped dtype for this model fits this GPU. ${this.dtypeStatusMessage(info, info.recommendedDtype, evaluateDtype(info, info.recommendedDtype, this.gpu))}`;
+      return;
+    }
+    if (info) {
+      const status = evaluateDtype(info, value as Exclude<Dtype, 'auto'>, this.gpu);
+      this.dtypeHint.textContent = this.dtypeStatusMessage(info, value as Exclude<Dtype, 'auto'>, status);
+    } else {
+      this.dtypeHint.textContent = '';
+    }
+  }
+
+  private async runTests() {
+    if (this.testAbort) return;
+    if (!this.gpu.available) {
+      this.testProgressEl.textContent = 'WebGPU not available — cannot test.';
+      this.testProgressEl.classList.remove('hidden');
+      return;
+    }
+    if (this.model.loaded) {
+      await this.model.unload();
+      this.updateModelStatus();
+    }
+    this.testAbort = new AbortController();
+    this.runTestsBtn.disabled = true;
+    this.cancelTestsBtn.classList.remove('hidden');
+    this.testProgressEl.classList.remove('hidden');
+    const controller = this.testAbort;
+
+    try {
+      this.testResults = await runCompatibilityTests(this.gpu, {
+        signal: controller.signal,
+        exhaustive: this.exhaustiveTestsCheckbox.checked,
+        onProgress: ({ index, total, modelId, dtype, phase }) => {
+          this.testProgressEl.textContent = `${index + 1}/${total} · ${modelId} (${dtype}) · ${phase}…`;
+          this.renderTestResults();
+        },
+      });
+    } finally {
+      const wasCanceled = controller.signal.aborted;
+      this.testAbort = null;
+      this.runTestsBtn.disabled = false;
+      this.cancelTestsBtn.classList.add('hidden');
+      this.testProgressEl.textContent = wasCanceled ? 'Tests canceled.' : 'Tests complete.';
+      this.renderTestResults();
+      this.populateDtypeOptions(findModel(this.modelSelect.value) ?? null);
+    }
+  }
+
+  private cancelTests() {
+    this.testAbort?.abort();
+  }
+
+  private clearTests() {
+    clearTestResults();
+    this.testResults = [];
+    this.renderTestResults();
+    this.populateDtypeOptions(findModel(this.modelSelect.value) ?? null);
+  }
+
+  private renderTestResults() {
+    if (!this.testResults.length) {
+      this.testResultsEl.innerHTML = '<p class="text-[11px] text-ink-400">No test results yet.</p>';
+      return;
+    }
+    const groups = new Map<string, TestResult[]>();
+    for (const r of this.testResults) {
+      if (!groups.has(r.modelId)) groups.set(r.modelId, []);
+      groups.get(r.modelId)!.push(r);
+    }
+
+    const rows: string[] = [];
+    for (const [modelId, entries] of groups) {
+      const info = findModel(modelId);
+      const label = info ? info.label : modelId;
+      const okRow = entries.find((e) => e.status === 'ok');
+      const suggested = okRow
+        ? suggestedDtypeFromTests(modelId, info?.recommendedDtype ?? 'q4', this.testResults)
+        : null;
+      rows.push(`<div class="font-medium text-ink-900 text-[12px] mt-2">${this.escapeHtml(label)}${suggested ? ` <span class="text-[11px] text-accent ml-1">→ ${suggested}</span>` : ''}</div>`);
+      for (const r of entries) {
+        const icon = r.status === 'ok' ? '✓' : r.status === 'timeout' ? '⏱' : '✗';
+        const color = r.status === 'ok' ? 'text-ink-700' : 'text-accent';
+        const timing = r.status === 'ok' ? `${((r.loadMs ?? 0) / 1000).toFixed(1)}s load · ${((r.inferMs ?? 0) / 1000).toFixed(1)}s infer` : (r.error ?? '');
+        rows.push(`<div class="flex items-baseline gap-2 ${color}"><span class="font-mono w-6">${icon}</span><span class="font-mono w-12 text-[11px]">${r.dtype}</span><span class="text-[11px] truncate">${this.escapeHtml(timing)}</span></div>`);
+      }
+    }
+    this.testResultsEl.innerHTML = rows.join('');
+  }
+
+  private loadData() {
+    this.threads = loadThreads();
+    if (this.threads.length === 0) {
+      const thread = createThread();
+      this.threads.push(thread);
+      saveThreads(this.threads);
+      this.switchThread(thread.id);
+    } else {
+      this.switchThread(this.threads[0].id);
+    }
+    this.renderThreadList();
+  }
+
+  private startNewChat() {
+    const thread = createThread();
+    this.threads.unshift(thread);
+    saveThreads(this.threads);
+    this.renderThreadList();
+    this.switchThread(thread.id);
+
+    if (window.innerWidth < 1024) {
+      this.sidebar.classList.add('-translate-x-full');
+    }
+  }
+
+  private switchThread(threadId: string) {
+    this.currentThreadId = threadId;
+    const thread = this.threads.find((t) => t.id === threadId);
+    if (!thread) return;
+
+    this.currentThreadTitle.textContent = thread.title;
+    this.renderMessages(thread.messages);
+    this.renderThreadList();
+  }
+
+  private renderThreadList() {
+    this.threadList.innerHTML = '';
+
+    for (const thread of this.threads) {
+      const row = document.createElement('div');
+      row.className = `group flex items-center gap-1 rounded-md transition-colors ${
+        thread.id === this.currentThreadId ? 'bg-cream-200' : 'hover:bg-cream-200/60'
+      }`;
+
+      const title = document.createElement('button');
+      title.className = `flex-1 min-w-0 text-left px-3 py-1.5 text-[13px] truncate ${
+        thread.id === this.currentThreadId ? 'text-ink-900' : 'text-ink-500 group-hover:text-ink-900'
+      }`;
+      title.textContent = thread.title;
+      title.onclick = () => this.switchThread(thread.id);
+
+      const del = document.createElement('button');
+      del.className =
+        'flex-shrink-0 p-1 mr-1 rounded text-ink-400 opacity-0 group-hover:opacity-100 hover:text-accent hover:bg-cream-100 transition-opacity';
+      del.title = 'Delete chat';
+      del.setAttribute('aria-label', 'Delete chat');
+      del.innerHTML =
+        '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>';
+      del.onclick = (e) => {
+        e.stopPropagation();
+        this.deleteThread(thread.id);
+      };
+
+      row.appendChild(title);
+      row.appendChild(del);
+      this.threadList.appendChild(row);
+    }
+  }
+
+  private deleteThread(threadId: string) {
+    const thread = this.threads.find((t) => t.id === threadId);
+    if (!thread) return;
+    if (thread.messages.length > 0 && !confirm(`Delete "${thread.title}"?`)) return;
+
+    this.threads = deleteThread(this.threads, threadId);
+
+    if (this.threads.length === 0) {
+      const fresh = createThread();
+      this.threads.push(fresh);
+      saveThreads(this.threads);
+      this.switchThread(fresh.id);
+    } else {
+      saveThreads(this.threads);
+      if (this.currentThreadId === threadId) {
+        this.switchThread(this.threads[0].id);
+      }
+    }
+    this.renderThreadList();
+  }
+
+  private renderMessages(messages: Message[]) {
+    this.chatMessages.innerHTML = '';
+    this.messagesContainer = document.createElement('div');
+    this.messagesContainer.className = 'max-w-3xl mx-auto px-6 py-10 space-y-8';
+    this.chatMessages.appendChild(this.messagesContainer);
+
+    if (messages.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'text-center mt-20';
+      empty.innerHTML = `
+        <h2 class="font-serif text-2xl text-ink-900 mb-2">Welcome to Local AI</h2>
+        <p class="text-sm text-ink-500">${this.model.loaded ? 'Start typing to chat.' : 'Load a model to start chatting. Everything runs on your device.'}</p>
+      `;
+      this.messagesContainer.appendChild(empty);
+      this.updateConversationContextMeter();
+      return;
+    }
+
+    for (const msg of messages) {
+      this.appendMessageElement(msg);
+    }
+
+    this.scrollToBottom();
+    this.updateConversationContextMeter();
+  }
+
+  private appendMessageElement(msg: Message): HTMLElement {
+    const isUser = msg.role === 'user';
+    const wrapper = document.createElement('div');
+    wrapper.className = isUser ? 'flex justify-end' : 'flex justify-start';
+    wrapper.dataset.messageId = msg.id;
+
+    const bubble = document.createElement('div');
+    if (isUser) {
+      bubble.className = 'max-w-[85%] bg-cream-100 border border-cream-200 text-ink-900 rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap';
+      bubble.textContent = msg.content;
+    } else {
+      bubble.className = 'w-full prose-chat';
+      bubble.innerHTML = this.renderMarkdown(msg.content);
+      this.highlightCode(bubble);
+      this.addCopyButtons(bubble);
+    }
+
+    wrapper.appendChild(bubble);
+    (this.messagesContainer ?? this.chatMessages).appendChild(wrapper);
+    return bubble;
+  }
+
+  private addCopyButtons(container: HTMLElement) {
+    const codeBlocks = container.querySelectorAll('pre');
+    for (const pre of codeBlocks) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'relative group';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className =
+        'absolute top-2 right-2 p-1.5 rounded bg-gray-700/80 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity text-xs';
+      copyBtn.textContent = 'Copy';
+      copyBtn.onclick = async () => {
+        const code = pre.querySelector('code')?.textContent || '';
+        await navigator.clipboard.writeText(code);
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => (copyBtn.textContent = 'Copy'), 2000);
+      };
+
+      pre.parentNode?.insertBefore(wrapper, pre);
+      wrapper.appendChild(pre);
+      wrapper.appendChild(copyBtn);
+    }
+  }
+
+  private scrollToBottom() {
+    this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+  }
+
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    return String(error);
+  }
+
+  private buildGenerationHistory(messages: Message[], search: WebSearchResponse | null) {
+    const history = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    if (!search) return history;
+
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role === 'user') {
+        history[i] = {
+          role: 'user',
+          content: formatWebSearchContext(search, history[i].content),
+        };
+        break;
+      }
+    }
+
+    return history;
+  }
+
+  private isRuntimeMemoryError(message: string): boolean {
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes('memory access out of bounds') ||
+      normalized.includes('out of memory') ||
+      normalized.includes('max buffer size') ||
+      normalized.includes('invalid buffer')
+    );
+  }
+
+  private resolveDtypeForLoad(): Dtype {
+    const configured = this.settings.dtype;
+    const info = findModel(this.settings.modelId.trim());
+    if (!info) return configured;
+
+    if (configured !== 'auto') {
+      const status = evaluateDtype(info, configured, this.gpu);
+      if (status === 'ok') return configured;
+    }
+
+    return pickRunnableDtype(info, this.gpu) ?? info.recommendedDtype;
+  }
+
+  private getLoadBlockReason(modelId: string, dtype: Dtype): string | null {
+    const info = findModel(modelId);
+    if (!info || dtype === 'auto') return null;
+    const status = evaluateDtype(info, dtype, this.gpu);
+    if (status === 'ok') return null;
+    return `${info.label} (${dtype}) cannot run on this GPU. ${this.dtypeStatusMessage(info, dtype, status)}`;
+  }
+
+  private updateModelStatus() {
+    const baseBtn = 'px-3 py-1.5 text-[13px] rounded-md transition-colors';
+    if (this.model.loaded) {
+      this.modelStatus.textContent = this.model.dtype ? `${this.model.name} (${this.model.dtype})` : this.model.name;
+      this.modelStatus.className = 'text-ink-700 truncate';
+      this.downloadModelBtn.disabled = true;
+      this.downloadModelBtn.textContent = 'Loaded';
+      this.downloadModelBtn.className = `${baseBtn} text-ink-400 cursor-default`;
+      return;
+    }
+
+    const dtype = this.resolveDtypeForLoad();
+    const blocked = this.getLoadBlockReason(this.settings.modelId.trim(), dtype);
+    if (blocked) {
+      this.modelStatus.textContent = `Not compatible: ${this.settings.modelId}`;
+      this.modelStatus.className = 'text-accent truncate';
+      this.downloadModelBtn.disabled = true;
+      this.downloadModelBtn.textContent = 'Not compatible';
+      this.downloadModelBtn.className = `${baseBtn} text-accent cursor-not-allowed`;
+      return;
+    }
+
+    this.modelStatus.textContent = `Selected: ${this.settings.modelId}`;
+    this.modelStatus.className = 'text-ink-400 truncate';
+    this.downloadModelBtn.disabled = false;
+    this.downloadModelBtn.textContent = 'Load model';
+    this.downloadModelBtn.className = `${baseBtn} text-ink-600 hover:text-ink-900 hover:bg-cream-100`;
+  }
+
+  private async loadModel() {
+    if (this.model.loading || this.model.loaded) return;
+
+    const modelId = this.settings.modelId.trim();
+    if (!modelId) return;
+    const dtype = this.resolveDtypeForLoad();
+    const blocked = this.getLoadBlockReason(modelId, dtype);
+
+    this.modelLoader.classList.remove('hidden');
+    this.loadingModelDetails.textContent = `Loading ${modelId} (${dtype}). This may take a few minutes on first load.`;
+    this.progressBar.style.width = '0%';
+    this.progressFile.textContent = '';
+    this.progressText.textContent = 'Initializing...';
+    this.modelStatus.textContent = `Loading: ${modelId}`;
+    this.modelStatus.className = 'text-accent truncate';
+    this.downloadModelBtn.disabled = true;
+
+    if (blocked) {
+      this.progressText.textContent = blocked;
+      this.loadingModelDetails.textContent = blocked;
+      this.modelStatus.textContent = `Not compatible: ${modelId}`;
+      this.modelStatus.className = 'text-accent truncate';
+      this.downloadModelBtn.textContent = 'Not compatible';
+      this.downloadModelBtn.disabled = true;
+      return;
+    }
+
+    try {
+      await this.model.load(modelId, (data) => {
+        if (data.progress !== undefined) {
+          this.progressBar.style.width = `${data.progress}%`;
+        }
+
+        switch (data.status) {
+          case 'init':
+            this.progressText.textContent = 'Initializing...';
+            break;
+          case 'download':
+            this.progressText.textContent = `Downloading... ${data.progress}%`;
+            this.progressFile.textContent = data.file || '';
+            break;
+          case 'loading':
+            this.progressText.textContent = data.message || 'Loading model into memory...';
+            break;
+          case 'ready':
+            this.progressText.textContent = 'Model ready!';
+            this.progressBar.style.width = '100%';
+            break;
+          case 'error':
+            this.progressText.textContent = data.message || 'Error loading model.';
+            break;
+        }
+      }, dtype);
+
+      this.updateModelStatus();
+
+      const thread = this.getCurrentThread();
+      if (thread && thread.messages.length === 0) {
+        this.renderMessages(thread.messages);
+      }
+    } catch (error) {
+      console.error('Failed to load model:', error);
+      this.modelStatus.textContent = `Load failed: ${modelId}`;
+      this.modelStatus.className = 'text-accent truncate';
+      this.downloadModelBtn.textContent = 'Retry';
+      this.downloadModelBtn.disabled = false;
+    } finally {
+      setTimeout(() => {
+        this.modelLoader.classList.add('hidden');
+      }, this.model.loaded ? 1000 : 3000);
+    }
+  }
+
+  private openSettings() {
+    const known = findModel(this.settings.modelId);
+    if (known) {
+      this.modelSelect.value = this.settings.modelId;
+      this.modelIdInput.value = '';
+      this.renderModelMeta(known);
+    } else {
+      this.modelSelect.value = '__custom__';
+      this.modelIdInput.value = this.settings.modelId;
+      this.modelMeta.textContent = 'Custom model — dtype auto-detected at load.';
+    }
+    this.populateDtypeOptions(known ?? null);
+    this.applyModelSettingsToInputs(this.settings.modelId, known ?? null, {
+      dtype: this.settings.dtype,
+      generation: this.settings.generation,
+    });
+    this.renderHardware();
+    this.renderTestResults();
+    this.settingsModal.classList.remove('hidden');
+  }
+
+  private closeSettings() {
+    this.settingsModal.classList.add('hidden');
+  }
+
+  private async saveSettingsHandler() {
+    const customId = this.modelIdInput.value.trim();
+    const modelId = this.modelSelect.value === '__custom__'
+      ? customId
+      : (customId || this.modelSelect.value);
+    if (!modelId) {
+      this.modelIdInput.focus();
+      return;
+    }
+
+    const maxNewTokens = this.maxNewTokensFromSlider();
+    let contextTokens = this.contextTokensFromSlider();
+    const selectedInfo = findModel(modelId);
+    if (selectedInfo && Number.isFinite(contextTokens) && Number.isFinite(maxNewTokens)) {
+      contextTokens = Math.min(contextTokens, Math.max(256, selectedInfo.contextWindowTokens - maxNewTokens));
+    }
+
+    const previousDtype = this.settings.dtype;
+    const dtype = this.dtypeSelect.value as AppSettings['dtype'];
+    const generation: GenerationParams = {
+      temperature: parseFloat(this.temperatureInput.value),
+      topP: parseFloat(this.topPInput.value),
+      maxNewTokens,
+      contextTokens,
+      repetitionPenalty: parseFloat(this.repPenaltyInput.value),
+    };
+
+    saveSettings({
+      modelId,
+      hfToken: '',
+      dtype,
+      generation,
+      modelSettings: {
+        ...this.settings.modelSettings,
+        [modelId]: {
+          dtype,
+          generation,
+        },
+      },
+    });
+    this.settings = loadSettings();
+
+    const shouldUnloadCurrentModel =
+      this.model.loaded &&
+      (this.model.name !== this.settings.modelId || previousDtype !== this.settings.dtype);
+
+    if (shouldUnloadCurrentModel) {
+      await this.model.unload();
+      const thread = this.getCurrentThread();
+      if (thread && thread.messages.length === 0) {
+        this.renderMessages(thread.messages);
+      }
+    }
+
+    this.updateModelStatus();
+    this.updateConversationContextMeter();
+    this.closeSettings();
+
+    if (shouldUnloadCurrentModel) {
+      void this.loadModel();
+    }
+  }
+
+  private getCurrentThread(): ChatThread | null {
+    return this.threads.find((t) => t.id === this.currentThreadId) || null;
+  }
+
+  private async compactCurrentThread() {
+    if (this.isGenerating || this.isCompacting) return;
+
+    const thread = this.getCurrentThread();
+    if (!thread) return;
+
+    const { toCompact, toKeep } = this.splitMessagesForCompaction(thread.messages);
+    if (toCompact.length === 0) return;
+
+    this.isCompacting = true;
+    this.isGenerating = true;
+    this.sendBtn.disabled = true;
+    this.updateWebSearchButton();
+    this.updateCompactContextButton();
+
+    try {
+      if (!this.model.loaded) {
+        await this.loadModel();
+        if (!this.model.loaded) return;
+      }
+
+      const transcript = this.formatCompactionTranscript(toCompact);
+      const summaryPrompt = [
+        {
+          role: 'user',
+          content: [
+            'Compact the earlier chat transcript into a durable context summary for continuing this same conversation.',
+            'Preserve user goals, technical facts, model/settings choices, decisions, unresolved issues, constraints, and any concrete data that future replies need.',
+            'Do not answer the conversation. Return only the compact summary in concise markdown bullets.',
+            '',
+            'Earlier transcript:',
+            transcript,
+          ].join('\n'),
+        },
+      ];
+
+      const summary = await this.model.generate(
+        summaryPrompt,
+        () => {},
+        new AbortController().signal,
+        {
+          ...this.settings.generation,
+          temperature: 0.2,
+          topP: 0.9,
+          maxNewTokens: Math.min(512, Math.max(192, this.settings.generation.maxNewTokens * 2)),
+          contextTokens: this.settings.generation.contextTokens,
+        },
+      );
+
+      const summaryMessage: Message = {
+        id: generateId(),
+        role: 'assistant',
+        content: `Context compacted from ${toCompact.length} earlier messages:\n\n${summary.trim()}`,
+        timestamp: Date.now(),
+      };
+
+      thread.messages = [summaryMessage, ...toKeep];
+      thread.updatedAt = Date.now();
+      saveThreads(this.threads);
+      this.renderMessages(thread.messages);
+      this.renderThreadList();
+      this.currentThreadTitle.textContent = thread.title;
+      this.updateConversationContextMeter();
+    } catch (error) {
+      console.error('Context compaction error:', error);
+      const errorMessage: Message = {
+        id: generateId(),
+        role: 'assistant',
+        content: `Context compaction failed: ${this.getErrorMessage(error)}`,
+        timestamp: Date.now(),
+      };
+      thread.messages.push(errorMessage);
+      thread.updatedAt = Date.now();
+      saveThreads(this.threads);
+      this.appendMessageElement(errorMessage);
+      this.updateConversationContextMeter();
+      this.scrollToBottom();
+    } finally {
+      this.isCompacting = false;
+      this.isGenerating = false;
+      this.sendBtn.disabled = false;
+      this.updateWebSearchButton();
+      this.updateCompactContextButton();
+    }
+  }
+
+  private async sendMessage() {
+    const content = this.messageInput.value.trim();
+    if (!content || this.isGenerating) return;
+
+    if (!this.model.loaded) {
+      await this.loadModel();
+      if (!this.model.loaded) {
+        // Model failed to load — keep the user's text so they don't lose it.
+        this.messageInput.value = content;
+        this.messageInput.focus();
+        return;
+      }
+    }
+
+    const thread = this.getCurrentThread();
+    if (!thread) return;
+
+    const userMsg: Message = {
+      id: generateId(),
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+    };
+    thread.messages.push(userMsg);
+    thread.updatedAt = Date.now();
+    updateThreadTitle(thread);
+    saveThreads(this.threads);
+
+    this.messageInput.value = '';
+    this.messageInput.style.height = 'auto';
+
+    if (thread.messages.length === 1) {
+      this.renderMessages([]);
+      this.messagesContainer?.replaceChildren();
+    }
+    this.appendMessageElement(userMsg);
+    this.renderThreadList();
+    this.currentThreadTitle.textContent = thread.title;
+    this.updateConversationContextMeter();
+    this.scrollToBottom();
+
+    this.isGenerating = true;
+    this.sendBtn.disabled = true;
+    this.abortController = new AbortController();
+    this.updateWebSearchButton();
+
+    const assistantMsg: Message = {
+      id: generateId(),
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    };
+    thread.messages.push(assistantMsg);
+
+    const bubble = this.appendMessageElement(assistantMsg);
+    bubble.textContent = '…';
+    this.updateConversationContextMeter();
+    this.scrollToBottom();
+
+    try {
+      let searchResults: WebSearchResponse | null = null;
+      if (this.webSearchEnabled) {
+        bubble.textContent = 'Searching web...';
+        try {
+          searchResults = await webSearch(content, {
+            signal: this.abortController.signal,
+            limit: 5,
+          });
+          bubble.textContent = searchResults.results.length
+            ? `Reading ${searchResults.results.length} web results...`
+            : 'No web results found. Answering from the model...';
+        } catch (error) {
+          if (this.abortController.signal.aborted) throw error;
+          const message = this.getErrorMessage(error);
+          bubble.textContent = `Web search failed: ${message}. Answering from the model...`;
+        }
+        this.scrollToBottom();
+      }
+
+      const chatHistory = this.buildGenerationHistory(thread.messages.slice(0, -1), searchResults);
+
+      let buffer = '';
+      const cleaned = await this.model.generate(
+        chatHistory,
+        (token) => {
+          buffer += token;
+          assistantMsg.content = buffer;
+          bubble.textContent = buffer;
+          this.updateConversationContextMeter();
+          this.scrollToBottom();
+        },
+        this.abortController.signal,
+        this.settings.generation
+      );
+
+      assistantMsg.content = cleaned;
+      bubble.innerHTML = this.renderMarkdown(cleaned);
+      this.highlightCode(bubble);
+      this.addCopyButtons(bubble);
+      this.updateConversationContextMeter();
+    } catch (error) {
+      console.error('Generation error:', error);
+      const message = this.getErrorMessage(error);
+      const memoryHint = this.isRuntimeMemoryError(message)
+        ? ' The model session was unloaded. Try a smaller model or lower Settings -> Generation -> Prompt context tokens / Max new tokens.'
+        : '';
+      if (memoryHint) {
+        await this.model.unload();
+        this.updateModelStatus();
+      }
+      assistantMsg.content = `Error generating response: ${message}${memoryHint}`;
+      bubble.className = 'w-full text-sm text-accent';
+      bubble.textContent = `Error: ${message}${memoryHint}`;
+      this.updateConversationContextMeter();
+    } finally {
+      this.isGenerating = false;
+      this.sendBtn.disabled = false;
+      this.abortController = null;
+      this.updateWebSearchButton();
+      saveThreads(this.threads);
+      this.updateConversationContextMeter();
+      this.scrollToBottom();
+    }
+  }
+
+  private highlightCode(container: HTMLElement) {
+    container.querySelectorAll('pre code').forEach((block) => {
+      hljs.highlightElement(block as HTMLElement);
+    });
+  }
+
+  private toggleSidebar() {
+    this.sidebar.classList.toggle('-translate-x-full');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  new ChatApp();
+});

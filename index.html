@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Local AI Chat - A private, browser-based chat interface running AI models locally via WebGPU" />
+  <title>Local AI Chat</title>
+  <link rel="icon" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Crect width="32" height="32" rx="7" fill="%23faf9f5"/%3E%3Cpath d="M8 18.5 14 7h4l-2.5 7H24L14 25l2.5-6.5H8Z" fill="%23c15f3c"/%3E%3C/svg%3E' />
+</head>
+<body class="h-screen w-screen overflow-hidden">
+  <!-- WebGPU Warning Banner -->
+  <div id="webgpu-warning" class="hidden absolute top-0 left-0 right-0 z-50 bg-cream-100 border-b border-cream-200 px-6 py-4">
+    <div class="max-w-3xl mx-auto flex items-start gap-4">
+      <div class="flex-shrink-0 mt-0.5 text-accent">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+      </div>
+      <div class="flex-1 text-sm">
+        <p class="font-serif text-ink-900 text-base">WebGPU is not available in this browser</p>
+        <p class="text-ink-500 mt-1">This app runs AI models locally via WebGPU. Without it, model inference won't work.</p>
+        <ul class="mt-3 space-y-1 text-ink-500 text-[13px]">
+          <li><span class="text-ink-700">Chrome / Edge 113+:</span> enabled by default; otherwise your GPU may be blocklisted.</li>
+          <li><span class="text-ink-700">Safari 17.4+:</span> requires macOS Sonoma.</li>
+          <li><span class="text-ink-700">Firefox:</span> Nightly only, with <code class="font-mono text-[12px] text-ink-700">dom.webgpu.enabled</code> in <code class="font-mono text-[12px] text-ink-700">about:config</code>.</li>
+          <li><span class="text-ink-700">Linux:</span> launch Chrome with <code class="font-mono text-[12px] text-ink-700">--enable-features=Vulkan</code>.</li>
+        </ul>
+        <div class="mt-3">
+          <a href="https://caniuse.com/webgpu" target="_blank" rel="noopener" class="text-accent hover:text-accent-hover underline underline-offset-2 decoration-accent/30 hover:decoration-accent text-[13px]">Check browser support →</a>
+        </div>
+      </div>
+      <button id="dismiss-webgpu-warning" class="flex-shrink-0 p-1 text-ink-500 hover:text-ink-900 transition-colors" aria-label="Dismiss">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div id="app" class="flex h-full w-full">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="w-64 bg-cream-100 flex flex-col transition-transform duration-300 absolute lg:relative z-20 h-full lg:translate-x-0 -translate-x-full">
+      <div class="px-5 pt-6 pb-4">
+        <h1 class="font-serif text-[17px] text-ink-900 tracking-tight">Local AI</h1>
+      </div>
+      <div class="px-3 pb-3">
+        <button id="new-chat-btn" class="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-ink-600 hover:text-ink-900 hover:bg-cream-200 rounded-md transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4v16m8-8H4"/></svg>
+          New chat
+        </button>
+      </div>
+      <div id="thread-list" class="flex-1 overflow-y-auto px-3 pb-3 space-y-0.5 scrollbar-soft">
+        <!-- Threads will be inserted here -->
+      </div>
+      <div class="px-5 py-4 border-t border-cream-200 text-[11px] text-ink-400 space-y-1">
+        <div id="model-status" class="truncate">Model: not loaded</div>
+        <div id="webgpu-status">WebGPU: checking…</div>
+      </div>
+    </aside>
+
+    <!-- Main Chat Area -->
+    <main class="flex-1 flex flex-col min-w-0 bg-cream-50 relative">
+      <!-- Top Bar -->
+      <header class="h-14 flex items-center justify-between px-5 border-b border-cream-200">
+        <div class="flex items-center gap-3 min-w-0">
+          <button id="toggle-sidebar" class="p-1.5 rounded-md text-ink-500 hover:text-ink-900 hover:bg-cream-100 lg:hidden" aria-label="Toggle sidebar">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
+          <span id="current-thread-title" class="font-serif text-[15px] text-ink-900 truncate">New chat</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <button id="compact-context-btn" class="px-3 py-1.5 text-[13px] text-ink-600 hover:text-ink-900 hover:bg-cream-100 rounded-md transition-colors disabled:text-ink-400/50 disabled:cursor-not-allowed" title="Compact older chat history into a summary">
+            Compact
+          </button>
+          <button id="download-model-btn" class="px-3 py-1.5 text-[13px] text-ink-600 hover:text-ink-900 hover:bg-cream-100 rounded-md transition-colors">
+            Load model
+          </button>
+          <button id="settings-btn" class="p-1.5 rounded-md text-ink-500 hover:text-ink-900 hover:bg-cream-100 transition-colors" aria-label="Settings">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Settings Modal -->
+      <div id="settings-modal" class="hidden absolute inset-0 z-50 bg-ink-900/20 backdrop-blur-sm flex items-center justify-center">
+        <div class="max-w-lg w-full mx-4 p-7 bg-cream-50 rounded-xl border border-cream-200 shadow-xl">
+          <div class="flex items-center justify-between mb-5">
+            <h2 class="font-serif text-xl text-ink-900">Settings</h2>
+            <button id="close-settings" class="p-1 text-ink-500 hover:text-ink-900 transition-colors" aria-label="Close">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+
+          <div class="space-y-5 max-h-[65vh] overflow-y-auto pr-1 scrollbar-soft">
+            <div>
+              <label class="block text-[13px] font-medium text-ink-700 mb-1.5" for="model-select">Model</label>
+              <select id="model-select" class="w-full bg-cream-50 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors">
+                <!-- Populated from registry -->
+              </select>
+              <details class="mt-2">
+                <summary class="text-[12px] text-ink-500 hover:text-ink-700 cursor-pointer select-none">Custom model ID</summary>
+                <input id="model-id-input" type="text" class="mt-2 w-full bg-cream-50 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors" placeholder="org/repo (must be public ONNX)" />
+                <p class="text-xs text-ink-500 mt-1.5">Overrides the dropdown. Must be a public ONNX model compatible with Transformers.js.</p>
+              </details>
+              <p id="model-meta" class="text-xs text-ink-500 mt-2"></p>
+            </div>
+
+            <div>
+              <label class="block text-[13px] font-medium text-ink-700 mb-1.5" for="dtype-select">Quantization (dtype)</label>
+              <select id="dtype-select" class="w-full bg-cream-50 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors">
+                <!-- Populated dynamically based on model + GPU -->
+              </select>
+              <p id="dtype-hint" class="text-xs text-ink-500 mt-1.5"></p>
+            </div>
+
+            <div id="resource-panel" class="border border-cream-200 rounded-lg px-3 py-3 bg-cream-100/40 space-y-3">
+              <div>
+                <div class="flex items-baseline justify-between gap-3 mb-1.5">
+                  <span class="text-[12px] text-ink-600">Context window</span>
+                  <span id="context-usage-label" class="text-[12px] font-mono text-ink-700">–</span>
+                </div>
+                <div class="h-1.5 w-full overflow-hidden rounded-full bg-cream-200">
+                  <div id="context-usage-bar" class="h-full rounded-full bg-ink-600 transition-all duration-300" style="width: 0%"></div>
+                </div>
+                <p id="context-usage-detail" class="text-[11px] text-ink-400 mt-1"></p>
+              </div>
+              <div>
+                <div class="flex items-baseline justify-between gap-3 mb-1.5">
+                  <span class="text-[12px] text-ink-600">Memory estimate</span>
+                  <span id="vram-usage-label" class="text-[12px] font-mono text-ink-700">–</span>
+                </div>
+                <div class="h-1.5 w-full overflow-hidden rounded-full bg-cream-200">
+                  <div id="vram-usage-bar" class="h-full rounded-full bg-ink-600 transition-all duration-300" style="width: 0%"></div>
+                </div>
+                <p id="vram-usage-detail" class="text-[11px] text-ink-400 mt-1"></p>
+              </div>
+            </div>
+
+            <div class="border-t border-cream-200 pt-4">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-[13px] font-medium text-ink-700">Hardware</span>
+                <span id="gpu-shader-f16" class="text-[11px] font-mono text-ink-500"></span>
+              </div>
+              <div id="gpu-info" class="text-[12px] text-ink-500 space-y-0.5"></div>
+            </div>
+
+            <div class="border-t border-cream-200 pt-4">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-[13px] font-medium text-ink-700">Compatibility tests</span>
+                <div class="flex gap-2">
+                  <button id="run-tests-btn" type="button" class="text-[12px] text-accent hover:text-accent-hover transition-colors">Run</button>
+                  <button id="cancel-tests-btn" type="button" class="hidden text-[12px] text-ink-500 hover:text-accent transition-colors">Cancel</button>
+                  <button id="clear-tests-btn" type="button" class="text-[12px] text-ink-500 hover:text-accent transition-colors">Clear</button>
+                </div>
+              </div>
+              <p class="text-[11px] text-ink-400 mb-2">Loads each model once, runs a small inference, and records what works on this GPU. Several minutes on first run.</p>
+              <label class="flex items-center gap-2 text-[12px] text-ink-600 mb-2">
+                <input id="exhaustive-tests" type="checkbox" class="accent-accent" />
+                Try every supported dtype (slower)
+              </label>
+              <div id="test-progress" class="hidden text-[12px] text-ink-500 mb-2"></div>
+              <div id="test-results" class="text-[12px] text-ink-700"></div>
+            </div>
+
+            <div class="border-t border-cream-200 pt-5">
+              <div class="flex items-center justify-between mb-3">
+                <label class="block text-[13px] font-medium text-ink-700">Generation</label>
+                <button id="reset-params-btn" type="button" class="text-[12px] text-ink-500 hover:text-accent transition-colors">Reset</button>
+              </div>
+              <div class="space-y-4">
+                <div>
+                  <div class="flex items-baseline justify-between mb-1.5">
+                    <span class="text-[12px] text-ink-600">Temperature</span>
+                    <span id="temperature-value" class="text-[12px] font-mono text-ink-700">0.70</span>
+                  </div>
+                  <input id="temperature-input" type="range" min="0" max="2" step="0.05" value="0.7" class="w-full accent-accent" />
+                  <p class="text-[11px] text-ink-400 mt-1">Lower = focused, higher = creative.</p>
+                </div>
+                <div>
+                  <div class="flex items-baseline justify-between mb-1.5">
+                    <span class="text-[12px] text-ink-600">Top-p</span>
+                    <span id="top-p-value" class="text-[12px] font-mono text-ink-700">0.95</span>
+                  </div>
+                  <input id="top-p-input" type="range" min="0" max="1" step="0.01" value="0.95" class="w-full accent-accent" />
+                  <p class="text-[11px] text-ink-400 mt-1">Nucleus sampling cutoff.</p>
+                </div>
+                <div>
+                  <div class="flex items-baseline justify-between mb-1.5">
+                    <span class="text-[12px] text-ink-600">Repetition penalty</span>
+                    <span id="rep-penalty-value" class="text-[12px] font-mono text-ink-700">1.10</span>
+                  </div>
+                  <input id="rep-penalty-input" type="range" min="1" max="2" step="0.05" value="1.1" class="w-full accent-accent" />
+                </div>
+                <div>
+                  <div class="flex items-baseline justify-between mb-1.5">
+                    <span class="text-[12px] text-ink-600">Max new tokens</span>
+                    <span id="max-tokens-value" class="text-[12px] font-mono text-ink-700">192</span>
+                  </div>
+                  <input id="max-tokens-input" type="range" min="0" max="0" step="1" value="0" list="max-token-stops" class="w-full accent-accent" />
+                  <datalist id="max-token-stops"></datalist>
+                  <div class="flex items-center justify-between text-[10px] font-mono text-ink-400 mt-0.5">
+                    <span id="max-tokens-min">16</span>
+                    <span id="max-tokens-max">1024</span>
+                  </div>
+                  <p class="text-[11px] text-ink-400 mt-1">Lower is faster and uses less memory.</p>
+                </div>
+                <div>
+                  <div class="flex items-baseline justify-between mb-1.5">
+                    <span class="text-[12px] text-ink-600">Prompt context tokens</span>
+                    <span id="context-tokens-value" class="text-[12px] font-mono text-ink-700">1,536</span>
+                  </div>
+                  <input id="context-tokens-input" type="range" min="0" max="0" step="1" value="0" list="context-token-stops" class="w-full accent-accent" />
+                  <datalist id="context-token-stops"></datalist>
+                  <div class="flex items-center justify-between text-[10px] font-mono text-ink-400 mt-0.5">
+                    <span id="context-tokens-min">256</span>
+                    <span id="context-tokens-max">8192</span>
+                  </div>
+                  <p class="text-[11px] text-ink-400 mt-1">Recent chat history sent to the model. Lower is faster.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-6 flex justify-end">
+            <button id="save-settings" class="px-4 py-2 bg-accent hover:bg-accent-hover text-cream-50 rounded-md text-[13px] font-medium transition-colors">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Model Loading Overlay -->
+      <div id="model-loader" class="hidden absolute inset-0 z-50 bg-cream-50/90 backdrop-blur-sm flex items-center justify-center">
+        <div class="max-w-md w-full mx-4 p-6 bg-cream-50 rounded-xl border border-cream-200 shadow-xl">
+          <h2 class="font-serif text-lg text-ink-900 mb-1">Loading model</h2>
+          <p id="loading-model-details" class="text-sm text-ink-500 mb-4">This may take a few minutes on first load.</p>
+          <div class="w-full bg-cream-200 rounded-full h-1 mb-3">
+            <div id="progress-bar" class="bg-accent h-1 rounded-full transition-all duration-300" style="width: 0%"></div>
+          </div>
+          <p id="progress-text" class="text-xs text-ink-500">Initializing…</p>
+          <p id="progress-file" class="text-xs text-ink-400 mt-1 truncate font-mono"></p>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div id="chat-messages" class="flex-1 overflow-y-auto scrollbar-soft">
+        <div class="max-w-3xl mx-auto px-6 py-10">
+          <div class="text-center mt-20">
+            <h2 class="font-serif text-2xl text-ink-900 mb-2">Welcome to Local AI</h2>
+            <p class="text-sm text-ink-500">Load a model to start chatting. Everything runs on your device.</p>
+          </div>
+        </div>
+      </div>
+      <div id="chat-context-meter" class="absolute right-2 top-16 bottom-28 z-10 w-1.5 overflow-hidden rounded-full border border-cream-300/70 bg-cream-200/80 shadow-sm" role="progressbar" aria-label="Conversation context usage" aria-valuemin="0" aria-valuemax="1536" aria-valuenow="0">
+        <div id="chat-context-meter-fill" class="absolute bottom-0 left-0 right-0 rounded-full transition-all duration-300" style="height: 0%; background-color: hsl(132 58% 38%);"></div>
+      </div>
+
+      <!-- Input -->
+      <div class="px-6 pb-6 pt-2">
+        <div class="max-w-3xl mx-auto">
+          <div class="flex items-end gap-2 bg-cream-50 border border-cream-300 rounded-2xl px-4 py-3 focus-within:border-accent/60 focus-within:ring-1 focus-within:ring-accent/20 transition-colors">
+            <textarea
+              id="message-input"
+              rows="1"
+              placeholder="Message Local AI…"
+              class="flex-1 bg-transparent text-[15px] text-ink-900 placeholder:text-ink-400 resize-none focus:outline-none max-h-40 leading-6"
+            ></textarea>
+            <button id="web-search-btn" class="flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors" type="button" aria-label="Toggle web search" aria-pressed="false" title="Toggle web search">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.6 9h16.8M3.6 15h16.8M12 3a14.5 14.5 0 010 18M12 3a14.5 14.5 0 000 18"/></svg>
+            </button>
+            <button id="send-btn" class="flex-shrink-0 p-1.5 text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors" aria-label="Send">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 12h14M13 5l7 7-7 7"/></svg>
+            </button>
+          </div>
+          <p class="text-[11px] text-ink-400 text-center mt-3">Runs locally via WebGPU. Chats stored in your browser.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
