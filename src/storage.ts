@@ -117,6 +117,7 @@ export interface AppSettings {
   generation: GenerationParams;
   dtype: Dtype;
   modelSettings: Record<string, ModelSpecificSettings>;
+  searxngUrl: string;
 }
 
 export const DEFAULT_GENERATION: GenerationParams = {
@@ -134,6 +135,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   generation: { ...DEFAULT_GENERATION },
   dtype: 'auto',
   modelSettings: {},
+  searxngUrl: '',
 };
 
 function defaultSettings(): AppSettings {
@@ -179,6 +181,19 @@ function normalizeModelSettings(value: unknown): Record<string, ModelSpecificSet
   return normalized;
 }
 
+function normalizeSearxngUrl(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return `${parsed.origin}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+  } catch {
+    return '';
+  }
+}
+
 function normalizeSettings(settings: AppSettings): AppSettings {
   const modelId = normalizeModelId(LEGACY_MODEL_IDS[settings.modelId] || settings.modelId || DEFAULT_SETTINGS.modelId);
   const modelSettings = normalizeModelSettings(settings.modelSettings);
@@ -191,6 +206,7 @@ function normalizeSettings(settings: AppSettings): AppSettings {
     dtype,
     generation: normalizeGeneration(settings.generation ?? savedForModel?.generation),
     modelSettings,
+    searxngUrl: normalizeSearxngUrl(settings.searxngUrl),
   };
 }
 

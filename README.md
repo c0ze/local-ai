@@ -152,9 +152,22 @@ Use **Export** to download the current thread as Markdown. Thread favorites are 
 
 ### Web Search Tool
 
-The globe button in the message composer enables a small browser-side search tool. When enabled, the app sends the current prompt to DuckDuckGo's Instant Answer API and Wikipedia search, injects up to five source snippets into the generation prompt, and asks the local model to cite used results with bracketed source numbers. This is intentionally basic: it does not crawl pages, does not run a full search index, and may return sparse results for niche queries.
+The globe button in the message composer enables a small browser-side search tool. When enabled, the app runs the current prompt through a configured SearxNG instance if one is set, then falls back to DuckDuckGo's Instant Answer API and Wikipedia. Up to five source snippets are injected into the generation prompt, and the local model is asked to cite used results with bracketed source numbers.
 
-Model inference still runs locally, but search queries leave the browser while the tool is enabled.
+The DuckDuckGo/Wikipedia fallback is intentionally basic: it does not crawl pages, does not run a full search index, and may return sparse results for niche queries or anything news-like. Point Settings → **Web search (SearxNG)** at your own SearxNG instance for real-web results.
+
+SearxNG requirements, since the request is cross-origin from the browser:
+
+- JSON format enabled in `settings.yml`:
+  ```yaml
+  search:
+    formats:
+      - html
+      - json
+  ```
+- `Access-Control-Allow-Origin` on SearxNG responses that permits the app origin (either the exact origin or `*`). Add the header at your reverse proxy if SearxNG sits behind one.
+
+Model inference still runs locally, but search queries leave the browser to whichever providers are active while the tool is enabled.
 
 ### Context and Speed
 

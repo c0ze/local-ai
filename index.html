@@ -168,6 +168,12 @@
               <div id="test-results" class="text-[12px] text-ink-700"></div>
             </div>
 
+            <div class="border-t border-cream-200 pt-4">
+              <label class="block text-[13px] font-medium text-ink-700 mb-1.5" for="searxng-url-input">Web search (SearxNG)</label>
+              <input id="searxng-url-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://search.example.com" class="w-full bg-cream-50 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors" />
+              <p class="text-[11px] text-ink-400 mt-1.5">Optional. When set, the globe button queries your SearxNG instance first (JSON format + CORS header required). Falls back to DuckDuckGo Instant Answer + Wikipedia when empty or unreachable.</p>
+            </div>
+
             <div class="border-t border-cream-200 pt-5">
               <div class="flex items-center justify-between mb-3">
                 <label class="block text-[13px] font-medium text-ink-700">Generation</label>

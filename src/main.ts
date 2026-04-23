@@ -123,6 +123,7 @@ class ChatApp {
   private closeSettingsBtn!: HTMLButtonElement;
   private saveSettingsBtn!: HTMLButtonElement;
   private modelIdInput!: HTMLInputElement;
+  private searxngUrlInput!: HTMLInputElement;
   private webgpuWarning!: HTMLElement;
   private webgpuWarningTitle!: HTMLElement;
   private webgpuWarningMessage!: HTMLElement;
@@ -234,6 +235,7 @@ class ChatApp {
     this.closeSettingsBtn = document.getElementById('close-settings') as HTMLButtonElement;
     this.saveSettingsBtn = document.getElementById('save-settings') as HTMLButtonElement;
     this.modelIdInput = document.getElementById('model-id-input') as HTMLInputElement;
+    this.searxngUrlInput = document.getElementById('searxng-url-input') as HTMLInputElement;
     this.webgpuWarning = document.getElementById('webgpu-warning')!;
     this.webgpuWarningTitle = document.getElementById('webgpu-warning-title')!;
     this.webgpuWarningMessage = document.getElementById('webgpu-warning-message')!;
@@ -1762,6 +1764,7 @@ class ChatApp {
       dtype: this.settings.dtype,
       generation: this.settings.generation,
     });
+    this.searxngUrlInput.value = this.settings.searxngUrl;
     this.renderHardware();
     this.renderTestResults();
     this.settingsModal.classList.remove('hidden');
@@ -1809,6 +1812,7 @@ class ChatApp {
           generation,
         },
       },
+      searxngUrl: this.searxngUrlInput.value,
     });
     this.settings = loadSettings();
 
@@ -1990,6 +1994,7 @@ class ChatApp {
           searchResults = await webSearch(content, {
             signal: this.abortController.signal,
             limit: 5,
+            searxngUrl: this.settings.searxngUrl,
           });
           bubble.textContent = searchResults.results.length
             ? `Reading ${searchResults.results.length} web results...`

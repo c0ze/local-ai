@@ -35,6 +35,16 @@ type WikipediaSearchResponse = {
   };
 };
 
+type SearxngResponse = {
+  query?: string;
+  results?: Array<{
+    title?: string;
+    url?: string;
+    content?: string;
+    engine?: string;
+  }>;
+};
+
 function cleanText(value: string | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
 }
@@ -140,6 +150,48 @@ async function searchDuckDuckGo(
   collectTopics(data.RelatedTopics, results, seenUrls, limit);
 }
 
+async function searchSearxng(
+  baseUrl: string,
+  query: string,
+  results: WebSearchResult[],
+  seenUrls: Set<string>,
+  limit: number,
+  signal?: AbortSignal,
+) {
+  const endpoint = new URL(`${baseUrl.replace(/\/+$/, '')}/search`);
+  endpoint.searchParams.set('q', query);
+  endpoint.searchParams.set('format', 'json');
+  endpoint.searchParams.set('safesearch', '0');
+
+  const response = await fetch(endpoint, {
+    signal,
+    headers: { Accept: 'application/json' },
+  });
+
+  if (!response.ok) {
+    throw new Error(`SearxNG failed with HTTP ${response.status}`);
+  }
+
+  const data = (await response.json()) as SearxngResponse;
+  for (const item of data.results ?? []) {
+    if (results.length >= limit) return;
+    const title = cleanText(item.title);
+    const url = cleanText(item.url);
+    const snippet = cleanText(item.content);
+    if (!url || !snippet) continue;
+
+    const cleanedUrl = url;
+    if (seenUrls.has(cleanedUrl)) continue;
+    seenUrls.add(cleanedUrl);
+    results.push({
+      title: title || sourceFromUrl(cleanedUrl),
+      url: cleanedUrl,
+      snippet,
+      source: cleanText(item.engine) || sourceFromUrl(cleanedUrl),
+    });
+  }
+}
+
 async function searchWikipedia(
   query: string,
   results: WebSearchResult[],
@@ -175,27 +227,52 @@ async function searchWikipedia(
   }
 }
 
+export interface WebSearchOptions {
+  signal?: AbortSignal;
+  limit?: number;
+  searxngUrl?: string;
+}
+
 export async function webSearch(
   query: string,
-  options: { signal?: AbortSignal; limit?: number } = {},
+  options: WebSearchOptions = {},
 ): Promise<WebSearchResponse> {
   const limit = Math.min(8, Math.max(1, options.limit ?? 5));
   const results: WebSearchResult[] = [];
   const seenUrls = new Set<string>();
   const errors: string[] = [];
 
-  try {
-    await searchDuckDuckGo(query, results, seenUrls, limit, options.signal);
-  } catch (error) {
-    if (options.signal?.aborted) throw error;
-    errors.push(error instanceof Error ? error.message : String(error));
+  const searxngUrl = options.searxngUrl?.trim();
+  const providers: string[] = [];
+
+  if (searxngUrl) {
+    try {
+      await searchSearxng(searxngUrl, query, results, seenUrls, limit, options.signal);
+      providers.push(`SearxNG (${sourceFromUrl(searxngUrl)})`);
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
   }
 
-  try {
-    await searchWikipedia(query, results, seenUrls, limit, options.signal);
-  } catch (error) {
-    if (options.signal?.aborted) throw error;
-    errors.push(error instanceof Error ? error.message : String(error));
+  if (results.length < limit) {
+    try {
+      await searchDuckDuckGo(query, results, seenUrls, limit, options.signal);
+      providers.push('DuckDuckGo Instant Answer');
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (results.length < limit) {
+    try {
+      await searchWikipedia(query, results, seenUrls, limit, options.signal);
+      providers.push('Wikipedia');
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
   }
 
   if (!results.length && errors.length) {
@@ -204,7 +281,7 @@ export async function webSearch(
 
   return {
     query,
-    provider: 'DuckDuckGo Instant Answer + Wikipedia',
+    provider: providers.length ? providers.join(' + ') : 'none',
     results,
   };
 }
