@@ -105,6 +105,8 @@ class ChatApp {
   private compactContextBtn!: HTMLButtonElement;
   private exportChatBtn!: HTMLButtonElement;
   private downloadModelBtn!: HTMLButtonElement;
+  private downloadModelLabel!: HTMLElement;
+  private sidebarBackdrop!: HTMLElement;
   private modelCacheBtn!: HTMLButtonElement;
   private webgpuHelpBtn!: HTMLButtonElement;
   private modelStatus!: HTMLElement;
@@ -201,6 +203,7 @@ class ChatApp {
 
   private initDOM() {
     this.sidebar = document.getElementById('sidebar')!;
+    this.sidebarBackdrop = document.getElementById('sidebar-backdrop')!;
     this.threadList = document.getElementById('thread-list')!;
     this.chatMessages = document.getElementById('chat-messages')!;
     this.chatContextMeter = document.getElementById('chat-context-meter')!;
@@ -217,6 +220,7 @@ class ChatApp {
     this.compactContextBtn = document.getElementById('compact-context-btn') as HTMLButtonElement;
     this.exportChatBtn = document.getElementById('export-chat-btn') as HTMLButtonElement;
     this.downloadModelBtn = document.getElementById('download-model-btn') as HTMLButtonElement;
+    this.downloadModelLabel = document.getElementById('download-model-label')!;
     this.modelCacheBtn = document.getElementById('model-cache-btn') as HTMLButtonElement;
     this.webgpuHelpBtn = document.getElementById('webgpu-help-btn') as HTMLButtonElement;
     this.modelStatus = document.getElementById('model-status')!;
@@ -300,6 +304,7 @@ class ChatApp {
   private initEvents() {
     this.newChatBtn.addEventListener('click', () => this.startNewChat());
     this.toggleSidebarBtn.addEventListener('click', () => this.toggleSidebar());
+    this.sidebarBackdrop.addEventListener('click', () => this.closeSidebarOnMobile());
     this.compactContextBtn.addEventListener('click', () => void this.compactCurrentThread());
     this.exportChatBtn.addEventListener('click', () => this.exportCurrentThread());
     this.downloadModelBtn.addEventListener('click', () => this.loadModel());
@@ -1265,9 +1270,7 @@ class ChatApp {
     this.renderThreadList();
     this.switchThread(thread.id);
 
-    if (window.innerWidth < 1024) {
-      this.sidebar.classList.add('-translate-x-full');
-    }
+    this.closeSidebarOnMobile();
   }
 
   private switchThread(threadId: string) {
@@ -1278,6 +1281,7 @@ class ChatApp {
     this.currentThreadTitle.textContent = thread.title;
     this.renderMessages(thread.messages);
     this.renderThreadList();
+    this.closeSidebarOnMobile();
   }
 
   private renderThreadList() {
@@ -1642,15 +1646,33 @@ class ChatApp {
     return `${info.label} (${dtype}) cannot run on this GPU. ${this.dtypeStatusMessage(info, dtype, status)}`;
   }
 
+  private setDownloadModelState(state: 'default' | 'loaded' | 'blocked' | 'loading', label: string) {
+    this.downloadModelLabel.textContent = label;
+    this.downloadModelBtn.setAttribute('aria-label', label);
+    this.downloadModelBtn.title = label;
+    this.downloadModelBtn.classList.remove(
+      'text-ink-600', 'hover:text-ink-900', 'hover:bg-cream-100',
+      'text-ink-400', 'cursor-default',
+      'text-accent', 'cursor-not-allowed', 'cursor-wait',
+    );
+    if (state === 'loaded') {
+      this.downloadModelBtn.classList.add('text-ink-400', 'cursor-default');
+    } else if (state === 'blocked') {
+      this.downloadModelBtn.classList.add('text-accent', 'cursor-not-allowed');
+    } else if (state === 'loading') {
+      this.downloadModelBtn.classList.add('text-accent', 'cursor-wait');
+    } else {
+      this.downloadModelBtn.classList.add('text-ink-600', 'hover:text-ink-900', 'hover:bg-cream-100');
+    }
+  }
+
   private updateModelStatus() {
-    const baseBtn = 'px-3 py-1.5 text-[13px] rounded-md transition-colors';
     if (this.model.loaded) {
       const name = this.displayModelName(this.model.name);
       this.modelStatus.textContent = this.model.dtype ? `${name} (${this.model.dtype})` : name;
       this.modelStatus.className = 'text-ink-700 truncate';
       this.downloadModelBtn.disabled = true;
-      this.downloadModelBtn.textContent = 'Loaded';
-      this.downloadModelBtn.className = `${baseBtn} text-ink-400 cursor-default`;
+      this.setDownloadModelState('loaded', 'Loaded');
       return;
     }
 
@@ -1660,16 +1682,14 @@ class ChatApp {
       this.modelStatus.textContent = `Not compatible: ${this.displayModelName(this.settings.modelId)}`;
       this.modelStatus.className = 'text-accent truncate';
       this.downloadModelBtn.disabled = true;
-      this.downloadModelBtn.textContent = 'Not compatible';
-      this.downloadModelBtn.className = `${baseBtn} text-accent cursor-not-allowed`;
+      this.setDownloadModelState('blocked', 'Not compatible');
       return;
     }
 
     this.modelStatus.textContent = `Selected: ${this.displayModelName(this.settings.modelId)}`;
     this.modelStatus.className = 'text-ink-400 truncate';
     this.downloadModelBtn.disabled = false;
-    this.downloadModelBtn.textContent = 'Load model';
-    this.downloadModelBtn.className = `${baseBtn} text-ink-600 hover:text-ink-900 hover:bg-cream-100`;
+    this.setDownloadModelState('default', 'Load model');
   }
 
   private async loadModel() {
@@ -1688,13 +1708,14 @@ class ChatApp {
     this.modelStatus.textContent = `Loading: ${this.displayModelName(modelId)}`;
     this.modelStatus.className = 'text-accent truncate';
     this.downloadModelBtn.disabled = true;
+    this.setDownloadModelState('loading', 'Loading');
 
     if (blocked) {
       this.progressText.textContent = blocked;
       this.loadingModelDetails.textContent = blocked;
       this.modelStatus.textContent = `Not compatible: ${this.displayModelName(modelId)}`;
       this.modelStatus.className = 'text-accent truncate';
-      this.downloadModelBtn.textContent = 'Not compatible';
+      this.setDownloadModelState('blocked', 'Not compatible');
       this.downloadModelBtn.disabled = true;
       setTimeout(() => {
         this.modelLoader.classList.add('hidden');
@@ -1739,7 +1760,7 @@ class ChatApp {
       console.error('Failed to load model:', error);
       this.modelStatus.textContent = `Load failed: ${this.displayModelName(modelId)}`;
       this.modelStatus.className = 'text-accent truncate';
-      this.downloadModelBtn.textContent = 'Retry';
+      this.setDownloadModelState('default', 'Retry');
       this.downloadModelBtn.disabled = false;
     } finally {
       setTimeout(() => {
@@ -2060,7 +2081,14 @@ class ChatApp {
   }
 
   private toggleSidebar() {
-    this.sidebar.classList.toggle('-translate-x-full');
+    const hidden = this.sidebar.classList.toggle('-translate-x-full');
+    this.sidebarBackdrop.classList.toggle('hidden', hidden);
+  }
+
+  private closeSidebarOnMobile() {
+    if (window.innerWidth >= 1024) return;
+    this.sidebar.classList.add('-translate-x-full');
+    this.sidebarBackdrop.classList.add('hidden');
   }
 }
 
