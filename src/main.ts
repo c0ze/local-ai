@@ -51,6 +51,7 @@ import {
   kokoroVoiceLabel,
   type TtsProgress,
 } from './tts';
+import { MoonshineSttManager, type SttProgress } from './stt';
 
 const CONTEXT_TOKEN_STOPS = [
   256,
@@ -86,6 +87,7 @@ const MAX_NEW_TOKEN_STOPS = [
 class ChatApp {
   private model = new ModelManager();
   private tts = new KokoroTtsManager();
+  private stt = new MoonshineSttManager();
   private threads: ChatThread[] = [];
   private currentThreadId: string | null = null;
   private isGenerating = false;
@@ -102,6 +104,7 @@ class ChatApp {
   private chatContextMeterFill!: HTMLElement;
   private messagesContainer: HTMLElement | null = null;
   private messageInput!: HTMLTextAreaElement;
+  private sttBtn!: HTMLButtonElement;
   private webSearchBtn!: HTMLButtonElement;
   private ttsToggleBtn!: HTMLButtonElement;
   private sendBtn!: HTMLButtonElement;
@@ -301,6 +304,7 @@ class ChatApp {
     this.exhaustiveTestsCheckbox = document.getElementById('exhaustive-tests') as HTMLInputElement;
     this.testProgressEl = document.getElementById('test-progress')!;
     this.testResultsEl = document.getElementById('test-results')!;
+    this.sttBtn = document.getElementById('stt-btn') as HTMLButtonElement;
     this.webSearchBtn = document.getElementById('web-search-btn') as HTMLButtonElement;
     this.ttsToggleBtn = document.getElementById('tts-toggle-btn') as HTMLButtonElement;
 
@@ -308,6 +312,7 @@ class ChatApp {
     this.populateTtsVoiceSelect();
     this.updateWebSearchButton();
     this.updateTtsToggleButton();
+    this.updateSttButton();
   }
 
   private populateModelSelect() {
@@ -345,6 +350,7 @@ class ChatApp {
     this.modelCacheBtn.addEventListener('click', () => void this.openModelCache());
     this.webgpuHelpBtn.addEventListener('click', () => this.openWebgpuHelp());
     this.webgpuWarningHelpBtn.addEventListener('click', () => this.openWebgpuHelp());
+    this.sttBtn.addEventListener('click', () => void this.toggleStt());
     this.webSearchBtn.addEventListener('click', () => this.toggleWebSearch());
     this.ttsToggleBtn.addEventListener('click', () => this.toggleTts());
     this.sendBtn.addEventListener('click', () => this.sendMessage());
@@ -588,6 +594,69 @@ class ChatApp {
     this.webSearchBtn.className = active
       ? 'flex-shrink-0 p-1.5 rounded-md bg-cream-100 text-accent hover:text-accent-hover disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors'
       : 'flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors';
+    if (!this.stt.recording) {
+      this.updateSttButton();
+    }
+  }
+
+  private updateSttButton(state: 'idle' | 'recording' | 'busy' = 'idle') {
+    const disabled = this.isGenerating || this.isCompacting || state === 'busy';
+    this.sttBtn.disabled = disabled;
+    this.sttBtn.title = state === 'recording'
+      ? 'Stop recording and transcribe'
+      : state === 'busy'
+        ? 'Transcribing microphone audio'
+        : 'Dictate message';
+    this.sttBtn.setAttribute('aria-label', this.sttBtn.title);
+    this.sttBtn.className = state === 'recording'
+      ? 'flex-shrink-0 p-1.5 rounded-md bg-cream-100 text-accent hover:text-accent-hover transition-colors'
+      : 'flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors';
+  }
+
+  private formatSttProgress(progress: SttProgress): string {
+    return progress.message;
+  }
+
+  private insertTranscript(text: string) {
+    const transcript = text.trim();
+    if (!transcript) return;
+
+    const current = this.messageInput.value;
+    const needsSpace = current.trim().length > 0 && !/\s$/.test(current);
+    this.messageInput.value = `${current}${needsSpace ? ' ' : ''}${transcript}`;
+    this.messageInput.focus();
+    this.messageInput.style.height = 'auto';
+    this.messageInput.style.height = Math.min(this.messageInput.scrollHeight, 160) + 'px';
+  }
+
+  private async toggleStt() {
+    if (this.isGenerating || this.isCompacting) return;
+
+    if (this.stt.recording) {
+      this.updateSttButton('busy');
+      try {
+        const transcript = await this.stt.stopAndTranscribe((progress) => {
+          this.setTtsStatus(this.formatSttProgress(progress));
+        });
+        this.insertTranscript(transcript);
+        this.setTtsStatus(transcript ? 'Dictation inserted.' : 'No speech detected.');
+      } catch (error) {
+        this.setTtsStatus(`Moonshine failed: ${this.getErrorMessage(error)}`);
+      } finally {
+        this.updateSttButton();
+      }
+      return;
+    }
+
+    try {
+      await this.stt.startRecording((progress) => {
+        this.setTtsStatus(this.formatSttProgress(progress));
+      });
+      this.updateSttButton('recording');
+    } catch (error) {
+      this.setTtsStatus(`Microphone failed: ${this.getErrorMessage(error)}`);
+      this.updateSttButton();
+    }
   }
 
   private toggleTts() {

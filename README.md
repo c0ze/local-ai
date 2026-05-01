@@ -7,6 +7,7 @@ A privacy-first, browser-based chat interface that runs AI models locally using 
 - **Fully Local Inference**: AI models run directly in your browser via WebGPU. Chats stay in localStorage.
 - **Optional Web Search Tool**: The composer globe button can fetch basic DuckDuckGo/Wikipedia results and pass them to the local model for the current answer.
 - **Local Text-to-Speech**: Kokoro voice synthesis runs in the browser and can play assistant responses on demand.
+- **Local Speech-to-Text**: The composer microphone button records a short dictation and transcribes it locally with Moonshine.
 - **OpenWebUI-inspired Design**: Clean chat interface with multiple conversation threads.
 - **Persistent Chats**: Conversations are saved to your browser's localStorage.
 - **Chat Management**: Rename or favorite threads, export a chat as Markdown, copy messages, and compact old context.
@@ -175,6 +176,10 @@ Model inference still runs locally, but search queries leave the browser to whic
 The speaker button in the composer toggles local Kokoro TTS. When it is enabled, speech starts after the assistant response finishes so model generation stays responsive. Each assistant response also shows a **Play** action next to **Copy** so previous responses can be spoken independently. Long responses are synthesized with up to three sentence jobs in flight, played in order, and the active response button changes to **Pause** / **Resume** during playback.
 
 Settings -> **Text to speech** lets you choose from the Kokoro-provided American and British English voices and adjust speech speed. Kokoro runs entirely in the browser using its Transformers.js stack. The app loads it lazily the first time you press **Play** and caches model/voice files in browser storage where supported.
+
+### Speech-to-Text
+
+The microphone button in the composer starts local dictation. Click it once to record, click again to stop, and the Moonshine transcript is inserted into the message box without sending automatically. Audio capture, resampling, and transcription all run in the browser; no backend or speech API is used.
 
 ### Context and Speed
 
