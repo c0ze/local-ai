@@ -112,12 +112,19 @@ export interface ModelSpecificSettings {
   generation: GenerationParams;
 }
 
+export interface TtsSettings {
+  enabled: boolean;
+  voice: string;
+  speed: number;
+}
+
 export interface AppSettings {
   modelId: string;
   generation: GenerationParams;
   dtype: Dtype;
   modelSettings: Record<string, ModelSpecificSettings>;
   searxngUrl: string;
+  tts: TtsSettings;
 }
 
 export const DEFAULT_GENERATION: GenerationParams = {
@@ -136,6 +143,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dtype: 'auto',
   modelSettings: {},
   searxngUrl: '',
+  tts: {
+    enabled: false,
+    voice: 'af_heart',
+    speed: 1,
+  },
 };
 
 function defaultSettings(): AppSettings {
@@ -143,6 +155,7 @@ function defaultSettings(): AppSettings {
     ...DEFAULT_SETTINGS,
     generation: { ...DEFAULT_GENERATION },
     modelSettings: { ...DEFAULT_SETTINGS.modelSettings },
+    tts: { ...DEFAULT_SETTINGS.tts },
   };
 }
 
@@ -194,6 +207,19 @@ function normalizeSearxngUrl(value: unknown): string {
   }
 }
 
+function normalizeTtsSettings(value: unknown): TtsSettings {
+  const tts = value && typeof value === 'object' ? value as Partial<TtsSettings> : {};
+  const voice = typeof tts.voice === 'string' && tts.voice.trim()
+    ? tts.voice.trim()
+    : DEFAULT_SETTINGS.tts.voice;
+
+  return {
+    enabled: typeof tts.enabled === 'boolean' ? tts.enabled : DEFAULT_SETTINGS.tts.enabled,
+    voice,
+    speed: clamp(tts.speed ?? DEFAULT_SETTINGS.tts.speed, 0.75, 1.25, DEFAULT_SETTINGS.tts.speed),
+  };
+}
+
 function normalizeSettings(settings: AppSettings): AppSettings {
   const modelId = normalizeModelId(LEGACY_MODEL_IDS[settings.modelId] || settings.modelId || DEFAULT_SETTINGS.modelId);
   const modelSettings = normalizeModelSettings(settings.modelSettings);
@@ -207,6 +233,7 @@ function normalizeSettings(settings: AppSettings): AppSettings {
     generation: normalizeGeneration(settings.generation ?? savedForModel?.generation),
     modelSettings,
     searxngUrl: normalizeSearxngUrl(settings.searxngUrl),
+    tts: normalizeTtsSettings(settings.tts),
   };
 }
 

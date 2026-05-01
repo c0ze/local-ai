@@ -181,6 +181,31 @@
               <p class="text-[11px] text-ink-400 mt-1.5">Optional. When set, the globe button queries your SearxNG instance first (JSON format + CORS header required). Falls back to DuckDuckGo Instant Answer + Wikipedia when empty or unreachable.</p>
             </div>
 
+            <div class="border-t border-cream-200 pt-4">
+              <div class="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <label class="block text-[13px] font-medium text-ink-700" for="tts-enabled-input">Text to speech</label>
+                  <p class="text-[11px] text-ink-400 mt-1">Kokoro runs locally in your browser. Replies are spoken only when you press Play.</p>
+                </div>
+                <input id="tts-enabled-input" type="checkbox" class="accent-accent" />
+              </div>
+              <div class="space-y-3">
+                <div>
+                  <label class="block text-[12px] text-ink-600 mb-1.5" for="tts-voice-select">Kokoro voice</label>
+                  <select id="tts-voice-select" class="w-full bg-cream-50 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors">
+                    <!-- Populated from Kokoro voice registry -->
+                  </select>
+                </div>
+                <div>
+                  <div class="flex items-baseline justify-between mb-1.5">
+                    <label class="block text-[12px] text-ink-600" for="tts-speed-input">Speed</label>
+                    <span id="tts-speed-value" class="text-[12px] font-mono text-ink-700">1.00</span>
+                  </div>
+                  <input id="tts-speed-input" type="range" min="0.75" max="1.25" step="0.05" value="1" class="w-full accent-accent" />
+                </div>
+              </div>
+            </div>
+
             <div class="border-t border-cream-200 pt-5">
               <div class="flex items-center justify-between mb-3">
                 <label class="block text-[13px] font-medium text-ink-700">Generation</label>
@@ -357,11 +382,14 @@
             <button id="web-search-btn" class="flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors" type="button" aria-label="Toggle web search" aria-pressed="false" title="Toggle web search">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.6 9h16.8M3.6 15h16.8M12 3a14.5 14.5 0 010 18M12 3a14.5 14.5 0 000 18"/></svg>
             </button>
+            <button id="tts-toggle-btn" class="flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors" type="button" aria-label="Toggle text to speech" aria-pressed="false" title="Toggle text to speech">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 10v4h3l4 4V6l-4 4H4z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.5 8.5a5 5 0 010 7M18.5 5.5a9 9 0 010 13"/></svg>
+            </button>
             <button id="send-btn" class="flex-shrink-0 p-1.5 text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors" aria-label="Send">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 12h14M13 5l7 7-7 7"/></svg>
             </button>
           </div>
-          <p class="text-[11px] text-ink-400 text-center mt-3">Runs locally via WebGPU. Chats stored in your browser.</p>
+          <p id="tts-status" class="min-h-4 text-[11px] text-ink-400 text-center mt-3">Runs locally via WebGPU. Chats stored in your browser.</p>
         </div>
       </div>
     </main>

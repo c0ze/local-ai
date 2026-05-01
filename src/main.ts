@@ -44,6 +44,13 @@ import {
   listDownloadedModels,
   type CachedModel,
 } from './modelCache';
+import {
+  KokoroTtsManager,
+  KOKORO_VOICES,
+  isKokoroVoiceId,
+  kokoroVoiceLabel,
+  type TtsProgress,
+} from './tts';
 
 const CONTEXT_TOKEN_STOPS = [
   256,
@@ -78,11 +85,13 @@ const MAX_NEW_TOKEN_STOPS = [
 
 class ChatApp {
   private model = new ModelManager();
+  private tts = new KokoroTtsManager();
   private threads: ChatThread[] = [];
   private currentThreadId: string | null = null;
   private isGenerating = false;
   private isCompacting = false;
   private webSearchEnabled = false;
+  private ttsMessageId: string | null = null;
   private abortController: AbortController | null = null;
   private settings: AppSettings = loadSettings();
 
@@ -94,6 +103,7 @@ class ChatApp {
   private messagesContainer: HTMLElement | null = null;
   private messageInput!: HTMLTextAreaElement;
   private webSearchBtn!: HTMLButtonElement;
+  private ttsToggleBtn!: HTMLButtonElement;
   private sendBtn!: HTMLButtonElement;
   private newChatBtn!: HTMLButtonElement;
   private toggleSidebarBtn!: HTMLButtonElement;
@@ -126,6 +136,11 @@ class ChatApp {
   private saveSettingsBtn!: HTMLButtonElement;
   private modelIdInput!: HTMLInputElement;
   private searxngUrlInput!: HTMLInputElement;
+  private ttsEnabledInput!: HTMLInputElement;
+  private ttsVoiceSelect!: HTMLSelectElement;
+  private ttsSpeedInput!: HTMLInputElement;
+  private ttsSpeedValue!: HTMLElement;
+  private ttsStatus!: HTMLElement;
   private webgpuWarning!: HTMLElement;
   private webgpuWarningTitle!: HTMLElement;
   private webgpuWarningMessage!: HTMLElement;
@@ -240,6 +255,11 @@ class ChatApp {
     this.saveSettingsBtn = document.getElementById('save-settings') as HTMLButtonElement;
     this.modelIdInput = document.getElementById('model-id-input') as HTMLInputElement;
     this.searxngUrlInput = document.getElementById('searxng-url-input') as HTMLInputElement;
+    this.ttsEnabledInput = document.getElementById('tts-enabled-input') as HTMLInputElement;
+    this.ttsVoiceSelect = document.getElementById('tts-voice-select') as HTMLSelectElement;
+    this.ttsSpeedInput = document.getElementById('tts-speed-input') as HTMLInputElement;
+    this.ttsSpeedValue = document.getElementById('tts-speed-value')!;
+    this.ttsStatus = document.getElementById('tts-status')!;
     this.webgpuWarning = document.getElementById('webgpu-warning')!;
     this.webgpuWarningTitle = document.getElementById('webgpu-warning-title')!;
     this.webgpuWarningMessage = document.getElementById('webgpu-warning-message')!;
@@ -282,9 +302,12 @@ class ChatApp {
     this.testProgressEl = document.getElementById('test-progress')!;
     this.testResultsEl = document.getElementById('test-results')!;
     this.webSearchBtn = document.getElementById('web-search-btn') as HTMLButtonElement;
+    this.ttsToggleBtn = document.getElementById('tts-toggle-btn') as HTMLButtonElement;
 
     this.populateModelSelect();
+    this.populateTtsVoiceSelect();
     this.updateWebSearchButton();
+    this.updateTtsToggleButton();
   }
 
   private populateModelSelect() {
@@ -301,6 +324,17 @@ class ChatApp {
     this.modelSelect.appendChild(customOpt);
   }
 
+  private populateTtsVoiceSelect() {
+    this.ttsVoiceSelect.innerHTML = '';
+
+    for (const voice of KOKORO_VOICES) {
+      const option = document.createElement('option');
+      option.value = voice.id;
+      option.textContent = `${voice.name} — ${voice.language}, ${voice.gender} · ${voice.grade}`;
+      this.ttsVoiceSelect.appendChild(option);
+    }
+  }
+
   private initEvents() {
     this.newChatBtn.addEventListener('click', () => this.startNewChat());
     this.toggleSidebarBtn.addEventListener('click', () => this.toggleSidebar());
@@ -312,6 +346,7 @@ class ChatApp {
     this.webgpuHelpBtn.addEventListener('click', () => this.openWebgpuHelp());
     this.webgpuWarningHelpBtn.addEventListener('click', () => this.openWebgpuHelp());
     this.webSearchBtn.addEventListener('click', () => this.toggleWebSearch());
+    this.ttsToggleBtn.addEventListener('click', () => this.toggleTts());
     this.sendBtn.addEventListener('click', () => this.sendMessage());
     this.settingsBtn.addEventListener('click', () => this.openSettings());
     this.closeSettingsBtn.addEventListener('click', () => this.closeSettings());
@@ -374,6 +409,9 @@ class ChatApp {
     this.contextTokensInput.addEventListener('input', () => {
       this.updateContextSliderLabels();
       this.refreshResourceBars();
+    });
+    this.ttsSpeedInput.addEventListener('input', () => {
+      this.ttsSpeedValue.textContent = Number(this.ttsSpeedInput.value).toFixed(2);
     });
     this.resetParamsBtn.addEventListener('click', () => {
       const info = findModel(this.modelSelect.value);
@@ -550,6 +588,54 @@ class ChatApp {
     this.webSearchBtn.className = active
       ? 'flex-shrink-0 p-1.5 rounded-md bg-cream-100 text-accent hover:text-accent-hover disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors'
       : 'flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors';
+  }
+
+  private toggleTts() {
+    const nextEnabled = !this.settings.tts.enabled;
+    this.settings = {
+      ...this.settings,
+      tts: {
+        ...this.settings.tts,
+        enabled: nextEnabled,
+      },
+    };
+    saveSettings(this.settings);
+    this.settings = loadSettings();
+    if (!nextEnabled) {
+      this.stopTts();
+      this.setTtsStatus('Text to speech is off.');
+    } else {
+      this.setTtsStatus(`Text to speech on: ${kokoroVoiceLabel(this.settings.tts.voice)}.`);
+    }
+    this.updateTtsToggleButton();
+    this.updateTtsPlaybackButtons();
+  }
+
+  private updateTtsToggleButton() {
+    const active = this.settings.tts.enabled;
+    this.ttsToggleBtn.setAttribute('aria-pressed', String(active));
+    this.ttsToggleBtn.title = active
+      ? 'Text to speech is on. Use Play on assistant responses.'
+      : 'Turn on text to speech.';
+    this.ttsToggleBtn.className = active
+      ? 'flex-shrink-0 p-1.5 rounded-md bg-cream-100 text-accent hover:text-accent-hover transition-colors'
+      : 'flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent transition-colors';
+  }
+
+  private setTtsStatus(message: string) {
+    this.ttsStatus.textContent = message || 'Runs locally via WebGPU. Chats stored in your browser.';
+    this.ttsStatus.className = message.includes('failed') || message.includes('blocked') || message.includes('Error')
+      ? 'min-h-4 text-[11px] text-accent text-center mt-3'
+      : 'min-h-4 text-[11px] text-ink-400 text-center mt-3';
+  }
+
+  private formatTtsProgress(progress: TtsProgress): string {
+    if (progress.message) return progress.message;
+    if (progress.status === 'download') return `Downloading Kokoro... ${progress.progress ?? 0}%`;
+    if (progress.status === 'loading') return 'Loading Kokoro...';
+    if (progress.status === 'ready') return 'Kokoro ready.';
+    if (progress.status === 'error') return `Kokoro failed: ${progress.message ?? 'unknown error'}`;
+    return 'Initializing Kokoro...';
   }
 
   private async checkWebGPU() {
@@ -1475,13 +1561,26 @@ class ChatApp {
       this.addCopyButtons(bubble);
     }
 
+    const actions = document.createElement('div');
+    actions.className = 'flex items-center gap-3';
+
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.className = 'text-[11px] text-ink-400 hover:text-accent transition-colors';
     copyBtn.textContent = 'Copy';
     copyBtn.addEventListener('click', () => void this.copyMessage(msg, copyBtn));
+    actions.appendChild(copyBtn);
 
-    shell.append(bubble, copyBtn);
+    if (!isUser) {
+      const playBtn = document.createElement('button');
+      playBtn.type = 'button';
+      playBtn.dataset.ttsMessageId = msg.id;
+      playBtn.addEventListener('click', () => void this.toggleMessageTts(msg, playBtn));
+      actions.appendChild(playBtn);
+      this.updateTtsPlaybackButton(playBtn, msg.id);
+    }
+
+    shell.append(bubble, actions);
     wrapper.appendChild(shell);
     (this.messagesContainer ?? this.chatMessages).appendChild(wrapper);
     return bubble;
@@ -1514,6 +1613,167 @@ class ChatApp {
     setTimeout(() => {
       button.textContent = 'Copy';
     }, 1500);
+  }
+
+  private speechTextFromMessage(content: string): string {
+    const container = document.createElement('div');
+    container.innerHTML = this.renderMarkdown(content);
+    container.querySelectorAll('pre').forEach((pre) => {
+      pre.replaceWith(document.createTextNode('\nCode block omitted.\n'));
+    });
+    container.querySelectorAll('br').forEach((br) => {
+      br.replaceWith(document.createTextNode('\n'));
+    });
+
+    const blockTags = new Set([
+      'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DIV', 'DL', 'DT',
+      'FIGCAPTION', 'FIGURE', 'FOOTER', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+      'HEADER', 'HR', 'LI', 'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'TABLE',
+      'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR', 'UL',
+    ]);
+
+    const parts: string[] = [];
+    const walk = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        parts.push(node.textContent ?? '');
+        return;
+      }
+
+      if (!(node instanceof HTMLElement)) return;
+      if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE') return;
+
+      if (node.tagName === 'LI') parts.push('\n');
+      for (const child of node.childNodes) {
+        walk(child);
+      }
+      if (blockTags.has(node.tagName)) parts.push('\n');
+    };
+
+    walk(container);
+
+    return parts.join('')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n[ \t]+/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+  }
+
+  private async toggleMessageTts(message: Message, button: HTMLButtonElement) {
+    if (!this.settings.tts.enabled) {
+      this.setTtsStatus('Turn on text to speech first.');
+      return;
+    }
+
+    if (this.ttsMessageId === message.id) {
+      if (this.tts.isPaused) {
+        await this.tts.resume();
+        this.setTtsStatus('Speech resumed.');
+      } else {
+        await this.tts.pause();
+        this.setTtsStatus('Speech paused.');
+      }
+      this.updateTtsPlaybackButtons();
+      return;
+    }
+
+    const text = this.speechTextFromMessage(message.content);
+    if (!text) {
+      this.setTtsStatus('Nothing readable to speak in this response.');
+      return;
+    }
+
+    this.ttsMessageId = message.id;
+    this.updateTtsPlaybackButtons();
+
+    try {
+      await this.tts.speak(text, {
+        voice: this.settings.tts.voice,
+        speed: this.settings.tts.speed,
+        onProgress: (progress) => {
+          this.setTtsStatus(this.formatTtsProgress(progress));
+        },
+        onEnded: () => {
+          if (this.ttsMessageId === message.id) {
+            this.ttsMessageId = null;
+            this.updateTtsPlaybackButtons();
+            this.setTtsStatus('Speech finished.');
+          }
+        },
+      });
+    } catch (error) {
+      const errorMessage = this.getErrorMessage(error);
+      this.ttsMessageId = null;
+      this.updateTtsPlaybackButtons();
+      this.setTtsStatus(`Kokoro failed: ${errorMessage}`);
+    }
+  }
+
+  private beginTtsForMessage(message: Message) {
+    if (!this.settings.tts.enabled) return;
+
+    const text = this.speechTextFromMessage(message.content);
+    if (!text) {
+      this.setTtsStatus('Nothing readable to speak in this response.');
+      return;
+    }
+
+    this.ttsMessageId = message.id;
+    this.updateTtsPlaybackButtons();
+    void this.tts.start({
+      voice: this.settings.tts.voice,
+      speed: this.settings.tts.speed,
+      onProgress: (progress) => {
+        this.setTtsStatus(this.formatTtsProgress(progress));
+      },
+      onEnded: () => {
+        if (this.ttsMessageId === message.id) {
+          this.ttsMessageId = null;
+          this.updateTtsPlaybackButtons();
+          this.setTtsStatus('Speech finished.');
+        }
+      },
+    }).catch((error) => {
+      if (this.ttsMessageId !== message.id) return;
+      const errorMessage = this.getErrorMessage(error);
+      this.ttsMessageId = null;
+      this.updateTtsPlaybackButtons();
+      this.setTtsStatus(`Kokoro failed: ${errorMessage}`);
+    });
+    this.tts.pushText(text);
+    this.tts.closeInput();
+  }
+
+  private stopTts() {
+    this.tts.stop();
+    this.ttsMessageId = null;
+    this.updateTtsPlaybackButtons();
+  }
+
+  private updateTtsPlaybackButton(button: HTMLButtonElement, messageId: string) {
+    const enabled = this.settings.tts.enabled;
+    const active = this.ttsMessageId === messageId;
+    const paused = active && this.tts.isPaused;
+    const label = paused ? 'Resume speech' : active ? 'Pause speech' : 'Play speech';
+    button.innerHTML = active && !paused
+      ? '<svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7V5Zm6.5 0H17v14h-3.5V5Z"/></svg>'
+      : '<svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7L8 5Z"/></svg>';
+    button.setAttribute('aria-label', label);
+    button.disabled = !enabled;
+    button.title = enabled
+      ? `${label} with Kokoro (${kokoroVoiceLabel(this.settings.tts.voice)})`
+      : 'Turn on text to speech to play this response.';
+    button.className = enabled
+      ? 'inline-flex h-5 w-5 items-center justify-center rounded text-ink-400 hover:text-accent hover:bg-cream-100 transition-colors disabled:text-ink-400/50 disabled:cursor-wait'
+      : 'inline-flex h-5 w-5 items-center justify-center rounded text-ink-400/50 cursor-not-allowed transition-colors';
+  }
+
+  private updateTtsPlaybackButtons() {
+    const buttons = this.chatMessages.querySelectorAll<HTMLButtonElement>('button[data-tts-message-id]');
+    for (const button of buttons) {
+      const id = button.dataset.ttsMessageId;
+      if (id) this.updateTtsPlaybackButton(button, id);
+    }
   }
 
   private safeFilename(value: string): string {
@@ -1786,6 +2046,12 @@ class ChatApp {
       generation: this.settings.generation,
     });
     this.searxngUrlInput.value = this.settings.searxngUrl;
+    this.ttsEnabledInput.checked = this.settings.tts.enabled;
+    this.ttsVoiceSelect.value = isKokoroVoiceId(this.settings.tts.voice)
+      ? this.settings.tts.voice
+      : 'af_heart';
+    this.ttsSpeedInput.value = String(this.settings.tts.speed);
+    this.ttsSpeedValue.textContent = this.settings.tts.speed.toFixed(2);
     this.renderHardware();
     this.renderTestResults();
     this.settingsModal.classList.remove('hidden');
@@ -1813,6 +2079,7 @@ class ChatApp {
     }
 
     const previousDtype = this.settings.dtype;
+    const previousTtsEnabled = this.settings.tts.enabled;
     const dtype = this.dtypeSelect.value as AppSettings['dtype'];
     const generation: GenerationParams = {
       temperature: parseFloat(this.temperatureInput.value),
@@ -1821,6 +2088,9 @@ class ChatApp {
       contextTokens,
       repetitionPenalty: parseFloat(this.repPenaltyInput.value),
     };
+    const ttsVoice = isKokoroVoiceId(this.ttsVoiceSelect.value)
+      ? this.ttsVoiceSelect.value
+      : 'af_heart';
 
     saveSettings({
       modelId,
@@ -1834,6 +2104,11 @@ class ChatApp {
         },
       },
       searxngUrl: this.searxngUrlInput.value,
+      tts: {
+        enabled: this.ttsEnabledInput.checked,
+        voice: ttsVoice,
+        speed: Number.parseFloat(this.ttsSpeedInput.value),
+      },
     });
     this.settings = loadSettings();
 
@@ -1849,7 +2124,13 @@ class ChatApp {
       }
     }
 
+    if (previousTtsEnabled && !this.settings.tts.enabled) {
+      this.stopTts();
+    }
+
     this.updateModelStatus();
+    this.updateTtsToggleButton();
+    this.updateTtsPlaybackButtons();
     this.updateConversationContextMeter();
     this.closeSettings();
 
@@ -2048,6 +2329,9 @@ class ChatApp {
       bubble.innerHTML = this.renderMarkdown(cleaned);
       this.highlightCode(bubble);
       this.addCopyButtons(bubble);
+      if (this.settings.tts.enabled && this.ttsMessageId === null && !this.tts.isActive) {
+        this.beginTtsForMessage(assistantMsg);
+      }
       this.updateConversationContextMeter();
     } catch (error) {
       console.error('Generation error:', error);
@@ -2058,6 +2342,9 @@ class ChatApp {
       if (memoryHint) {
         await this.model.unload();
         this.updateModelStatus();
+      }
+      if (this.ttsMessageId === assistantMsg.id) {
+        this.stopTts();
       }
       assistantMsg.content = `Error generating response: ${message}${memoryHint}`;
       bubble.className = 'w-full text-sm text-accent';
