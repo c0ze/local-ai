@@ -1,186 +1,144 @@
 # Local AI Chat
 
-A privacy-first, browser-based chat interface that runs AI models locally using WebGPU. No server required; model inference happens in your browser.
+Local AI Chat is a private browser chat app for running public ONNX language models directly in the browser with WebGPU. The app is a static Vite/TypeScript site; there is no inference server, and chat state lives in browser storage.
 
-## Features
+Optional tools can add outside context:
 
-- **Fully Local Inference**: AI models run directly in your browser via WebGPU. Chats stay in localStorage.
-- **Optional Web Search Tool**: Settings can enable DuckDuckGo/Wikipedia/SearxNG context for every answer.
-- **Optional MCP Tool Bridge**: Settings can register MCP server URLs that are used through a small local bridge.
-- **Local Text-to-Speech**: Kokoro voice synthesis runs in the browser and can play assistant responses on demand.
-- **Local Speech-to-Text**: The composer microphone button records a short dictation and transcribes it locally with Moonshine.
-- **OpenWebUI-inspired Design**: Clean chat interface with multiple conversation threads.
-- **Persistent Chats**: Conversations are saved to your browser's localStorage.
-- **Chat Management**: Rename or favorite threads, export a chat as Markdown, copy messages, and compact old context.
-- **Markdown Support**: Assistant responses render markdown with syntax-highlighted code blocks.
-- **Model Registry**: Curated public ONNX presets with GPU-aware dtype selection.
-- **Downloaded Model Manager**: View cached model files and delete them from the browser cache.
-- **Compatibility Tests**: Settings can load each preset and record which dtype works on your GPU.
-- **One-Click Deploy**: GitHub Actions workflow included for automatic GitHub Pages deployment.
+- Web search through a user-configured SearxNG instance, with DuckDuckGo Instant Answer and Wikipedia fallbacks.
+- MCP tools through a small local Node bridge that can connect to stdio, Streamable HTTP, or SSE MCP servers.
+- Local text-to-speech through Kokoro.
+- Local speech-to-text through Moonshine.
 
-## Browser Compatibility
+## What It Can Do
 
-| Feature | Chrome | Firefox | Safari | Edge |
-|---------|--------|---------|--------|------|
-| WebGPU | 113+ | Nightly* | 17.4+ | 113+ |
-| Required | ✅ | ⚠️ | ✅ | ✅ |
+- Run local chat inference with Transformers.js and WebGPU.
+- Select from a curated registry of public Hugging Face ONNX models, or enter a custom compatible model ID.
+- Pick or auto-select dtype/quantization based on model support and detected GPU capability.
+- Show GPU details, shader-f16 support, approximate model memory, and context window usage.
+- Keep multiple chat threads in `localStorage`, including rename, favorite, delete, and Markdown export.
+- Compact older conversation turns into a local-model summary to reduce future prompt size.
+- Inspect and delete downloaded Hugging Face model files from the browser Cache API.
+- Run browser-side model compatibility checks and save per-GPU results in `localStorage`.
+- Dictate prompts locally with Moonshine and play assistant responses locally with Kokoro.
+- Inject web search context into prompts when search is enabled.
+- Let the local model choose one MCP tool call, execute it through the bridge, then answer from the tool result.
 
-\* Firefox WebGPU support is behind a flag in Nightly builds.
+## Requirements
 
-**Minimum**: Chrome/Edge 113+, or Safari 17.4+ on macOS Sonoma.
+- Node.js 24.14.0 or newer for local development.
+- A secure browser context. `localhost` works for development.
+- A WebGPU-capable browser and GPU for chat inference.
 
-## Browser Setup
+| Browser | WebGPU status |
+| --- | --- |
+| Chrome / Edge 113+ | Supported on capable hardware |
+| Safari 17.4+ | Supported on macOS Sonoma or newer |
+| Firefox | Nightly only, behind `dom.webgpu.enabled` |
 
-Most systems work without changing browser settings. If Settings shows `google - swiftshader`, `Software fallback adapter: yes`, or a 1 GB max buffer on Linux / AMD, Chrome is using its software WebGPU adapter instead of the real GPU.
+If Settings reports `google - swiftshader`, a software fallback adapter, or a low 1 GB buffer limit on Linux/AMD, Chrome is probably not using the real GPU.
 
 ### Chrome on Linux / AMD
 
 1. Open `chrome://flags`.
-2. Search for `Unsafe WebGPU` and set it to **Enabled**.
-3. Search for `Vulkan` and set it to **Enabled**.
+2. Enable `Unsafe WebGPU`.
+3. Enable `Vulkan`.
 4. Relaunch Chrome.
-5. Open Local AI Settings. Hardware should show `amd`, `shader-f16 ✓`, and a max buffer above 1 GB.
+5. Check Local AI Settings for the real GPU, `shader-f16`, and a max buffer above 1 GB.
 
-If YouTube or other video sites show a white video player after enabling Vulkan, try these in order:
-
-1. Open `chrome://flags`.
-2. Search for `Choose ANGLE graphics backend` and set it to **OpenGL**.
-3. Relaunch Chrome and test Local AI plus YouTube.
-4. If video is still white, search for `Zero-copy rasterizer` and set it to **Disabled**.
-5. Relaunch Chrome and test again.
-6. If video is still white, search for `Hardware-accelerated video decode` and set only that flag to **Disabled**.
-7. Relaunch Chrome.
-
-Do not disable Chrome Settings → System → **Use graphics acceleration when available**. Turning that off disables the GPU path Local AI needs.
+If video playback turns white after enabling Vulkan, try `Choose ANGLE graphics backend -> OpenGL`, then disable `Zero-copy rasterizer`. If needed, disable only `Hardware-accelerated video decode`. Do not disable Chrome's general graphics acceleration setting, because that disables the WebGPU path this app needs.
 
 ## Development
 
-### Prerequisites
-
-- [Node.js 24.14.0](https://nodejs.org/) (recommended via [mise](https://mise.jdx.dev/))
-- A WebGPU-capable browser
-
-### Setup
-
 ```bash
-# Install dependencies
 npm install
-
-# Start development server
 npm run dev
 ```
 
-`npm run dev` starts both the Vite app and the local MCP bridge. The bridge uses `mcp.config.json` when present, otherwise it falls back to `mcp.config.example.json`.
+`npm run dev` starts both Vite and the local MCP bridge. The bridge uses `mcp.config.json` if present, otherwise `mcp.config.example.json`.
 
-There are no required application environment variables for local development. `VITE_BASE_URL` is optional and only needed when serving the built site from a subpath.
+The app has no required environment variables. `VITE_BASE_URL` is optional when serving the built site from a subpath.
 
-### Build
-
-```bash
-npm run typecheck
-npm run typecheck:tests
-npm run build
-```
-
-The static site will be output to the `dist/` directory.
-
-### Verification Commands
+Useful commands:
 
 | Command | Purpose |
-|---------|---------|
-| `npm run typecheck` | Type-check the Vite application code. |
-| `npm run typecheck:tests` | Type-check the Playwright model compatibility suite. |
-| `npm run build` | Build the production static site. |
-| `npm run mcp:bridge` | Start the local MCP bridge with `mcp.config.json`. |
-| `npm audit --audit-level=moderate` | Check installed packages for moderate or higher vulnerabilities. |
-
-### Model Integration Tests
-
-The browser integration suite downloads each configured model, loads it with WebGPU, asks a short prompt, records the answer and timings, and fails on severe console/runtime errors. Results are written to `test-results/model-compatibility-*.json` with suggested dtype and generation defaults.
-
-```bash
-# First time only
-npm run test:models:install
-
-# Test each model with its recommended dtype
-npm run test:models
-
-# Try every viable dtype for each model, then compare results
-npm run test:models:all
-```
-
-Useful filters:
-
-```bash
-MODEL_TEST_MODELS=qwen npm run test:models
-MODEL_TEST_DTYPES=q4 npm run test:models
-PW_HEADLESS=1 npm run test:models
-```
-
-Other optional test variables include `PORT`, `PLAYWRIGHT_BASE_URL`, `MODEL_TEST_LOAD_TIMEOUT_MS`, `MODEL_TEST_INFER_TIMEOUT_MS`, and `MODEL_TEST_RESULTS_DIR`.
-
-## Deployment
-
-### GitHub Pages (Recommended)
-
-1. Push this repository to GitHub.
-2. Go to **Settings → Pages**.
-3. Set **Source** to "GitHub Actions".
-4. Push to the `main` branch — the workflow in `.github/workflows/deploy.yml` will build and deploy automatically.
-
-### Manual Deploy
-
-Build the project and upload the `dist/` folder to any static hosting provider:
-
-```bash
-npm run build
-```
+| --- | --- |
+| `npm run dev` | Start Vite and the MCP bridge together. |
+| `npm run dev:vite` | Start only the Vite dev server. |
+| `npm run mcp:bridge` | Start only the MCP bridge. |
+| `npm run typecheck` | Type-check the application. |
+| `npm run typecheck:tests` | Type-check the Playwright model tests. |
+| `npm run build` | Type-check and build the static site into `dist/`. |
+| `npm run preview` | Preview the production build. |
+| `npm audit --audit-level=moderate` | Check dependencies for moderate or higher vulnerabilities. |
 
 ## Architecture
 
-| Layer | Technology |
-|-------|-----------|
-| Framework | Vanilla TypeScript + Vite |
-| Styling | Tailwind CSS |
-| AI Inference | Transformers.js (WebGPU) |
-| Tool Bridge | MCP TypeScript SDK + local Node sidecar |
-| Markdown | marked + highlight.js |
-| Storage | localStorage |
+The application is intentionally thin:
 
-## Model Notes
+- `index.html` contains the app shell and settings/modals.
+- `src/main.ts` owns UI state, thread rendering, settings, model lifecycle, search/MCP orchestration, TTS/STT controls, and cache/test UI.
+- `src/model.ts` wraps Transformers.js model loading, prompt formatting, streaming generation, dtype selection fallback, WebGPU checks, and context trimming.
+- `src/models.ts` is the model registry with dtype support, approximate weights, buffer requirements, context windows, aliases, and loader selection.
+- `src/storage.ts` validates and persists threads/settings in `localStorage`.
+- `src/webSearch.ts` fetches SearxNG, DuckDuckGo, Wikipedia, and computed current-time facts, then formats prompt context.
+- `src/mcp.ts` talks to the local bridge and formats the model prompts used for MCP tool selection and final answers.
+- `scripts/mcp-bridge.mjs` exposes `/health`, `/tools`, and `/tools/call` and connects to configured MCP servers.
+- `src/modelCache.ts` reads and deletes Transformers.js/Hugging Face entries in the browser Cache API.
+- `src/tts.ts` and `src/stt.ts` implement local Kokoro speech playback and Moonshine dictation.
+- `src/tester.ts` and `tests/model-compatibility.spec.ts` run model compatibility checks in the browser.
 
-The app loads AI models directly from Hugging Face into your browser's cache. On first use, the selected model is downloaded. Subsequent loads reuse the browser cache when available.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the runtime flow, tool behavior, storage model, and main extension points.
 
-### Chat and Model Cache Management
+## Models
 
-Chats are stored in `localStorage` and model files are stored in the browser Cache API used by Transformers.js. Use **Models** in the chat header to inspect downloaded Hugging Face model files, load a cached model, delete a single model, or clear all downloaded model files. Clearing model files does not delete chat history.
+Models are loaded from Hugging Face by Transformers.js. First load downloads model assets into the browser cache; later loads reuse cached files when available.
 
-Use **Export** to download the current thread as Markdown. Thread favorites are stored with the thread data and only affect sidebar ordering. Rename a thread from the sidebar with the pencil icon (or double-click its title); Enter saves, Escape cancels.
+The built-in registry currently includes small sanity-check models through larger chat/coding models such as Qwen, Llama, DeepSeek, Phi, and Gemma-family ONNX presets. Custom models must be public, browser-loadable, and compatible with Transformers.js ONNX loading.
 
-### Web Search Tool
+Important constraints:
 
-Settings -> **Tools** can enable a small browser-side search tool. When enabled, every prompt runs through a configured SearxNG instance if one is set, then falls back to DuckDuckGo's Instant Answer API and Wikipedia. Direct facts and up to five source snippets are injected into the generation prompt, and the local model is asked to cite used results with bracketed source numbers.
+- Gated/private Hugging Face models cannot be loaded safely from client-side browser code.
+- WebGPU is required for chat inference.
+- Larger models can fail because of browser/GPU buffer limits, even when total VRAM is higher.
+- `q4f16` and `fp16` require `shader-f16`; use `q4` or `q8` on GPUs without it.
 
-The DuckDuckGo/Wikipedia fallback is intentionally basic: it does not crawl pages, does not run a full search index, and may return sparse results for niche queries or anything news-like. Point Settings → **Web search (SearxNG)** at your own SearxNG instance for real-web results.
+Use the Settings compatibility tests to record what loads and generates on the current browser/GPU. Playwright can run the same checks:
 
-SearxNG requirements, since the request is cross-origin from the browser:
+```bash
+npm run test:models:install
+npm run test:models
+MODEL_TEST_DTYPES=all npm run test:models
+MODEL_TEST_MODELS=qwen npm run test:models
+PW_HEADLESS=1 npm run test:models
+```
 
-- JSON format enabled in `settings.yml`:
-  ```yaml
-  search:
-    formats:
-      - html
-      - json
-  ```
-- `Access-Control-Allow-Origin` on SearxNG responses that permits the app origin (either the exact origin or `*`). Add the header at your reverse proxy if SearxNG sits behind one.
+Optional variables include `PORT`, `PLAYWRIGHT_BASE_URL`, `MODEL_TEST_LOAD_TIMEOUT_MS`, `MODEL_TEST_INFER_TIMEOUT_MS`, `MODEL_TEST_RESULTS_DIR`, `MODEL_TEST_QUESTION`, `MODEL_TEST_DTYPES`, and `MODEL_TEST_INCLUDE_TOO_LARGE`.
 
-Model inference still runs locally, but search queries leave the browser to whichever providers are active while the tool is enabled.
+## Web Search
 
-### MCP Tools
+Enable web search in Settings -> Tools. When enabled, each user prompt is searched before generation. The app tries a configured SearxNG instance first, then fills missing results with DuckDuckGo Instant Answer and Wikipedia. It also computes current-time facts for simple time-zone queries through browser `Intl`.
 
-Settings -> **Tools** lets you add MCP server URLs. If any URLs are saved, MCP tools are available on every prompt. Because the app is a static browser app, it cannot spawn stdio MCP servers directly. Instead, it talks to a local HTTP bridge, and the bridge connects to configured HTTP/SSE MCP servers.
+The search context is injected into the latest user message, and the model is instructed to cite result snippets with `[1]`, `[2]`, or direct facts with `[F1]`.
 
-This also works from the deployed static site: run the bridge on the same computer as your browser, point Settings -> **MCP bridge** at `http://localhost:8787`, and add one MCP server URL per line under **MCP server URLs**. The bridge sends CORS and Private Network Access headers so an HTTPS-hosted page can call the local companion service.
+For SearxNG, the browser must be allowed to call the instance cross-origin:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+Your reverse proxy or SearxNG instance must also return `Access-Control-Allow-Origin` for the app origin, or `*`.
+
+Search queries leave the browser while search is enabled. Model inference still runs locally.
+
+## MCP Tools
+
+The static app cannot spawn stdio MCP servers directly, so it talks to a local bridge. The bridge can connect to:
+
+- Servers configured in `mcp.config.json`, including stdio servers.
+- Per-browser-session HTTP/SSE server URLs saved in Settings -> Tools.
 
 Start the bridge:
 
@@ -188,9 +146,13 @@ Start the bridge:
 npm run mcp:bridge
 ```
 
-Then open Settings and confirm **MCP bridge** is `http://localhost:8787`. Add MCP server URLs such as `http://localhost:3000/mcp`. The app asks the model whether one MCP tool call is needed, calls the tool when the model returns the required JSON, then asks the model to answer with the tool result.
+Default bridge URL:
 
-To connect your own servers, create `mcp.config.json`:
+```text
+http://localhost:8787
+```
+
+Example `mcp.config.json`:
 
 ```json
 {
@@ -209,63 +171,31 @@ To connect your own servers, create `mcp.config.json`:
 }
 ```
 
-You can still add always-on bridge-side servers in `mcp.config.json`, which is useful for stdio MCP servers. Only configure MCP servers you trust; tool calls can read, write, or send data depending on the server you expose.
+At generation time, the app lists tools, asks the loaded local model whether one tool call is needed, parses a JSON tool call if the model returns one, calls the bridge, then asks the model to answer from the tool result. The current implementation supports one MCP tool call per user prompt.
 
-### Text-to-Speech
+Only expose MCP servers you trust. Tool capabilities depend entirely on the server; they may read files, write files, call APIs, or send data elsewhere.
 
-The speaker button in the composer toggles local Kokoro TTS. When it is enabled, speech starts after the assistant response finishes so model generation stays responsive. Each assistant response also shows a **Play** action next to **Copy** so previous responses can be spoken independently. Long responses are synthesized with up to three sentence jobs in flight, played in order, and the active response button changes to **Pause** / **Resume** during playback.
+## Speech
 
-Settings -> **Text to speech** lets you choose from the Kokoro-provided American and British English voices and adjust speech speed. Kokoro runs entirely in the browser using its Transformers.js stack. The app loads it lazily the first time you press **Play** and caches model/voice files in browser storage where supported.
+Text-to-speech uses `onnx-community/Kokoro-82M-v1.0-ONNX` and runs locally in the browser. It loads lazily, supports Kokoro American/British English voices, synthesizes long responses in sentence chunks, and can pause/resume playback.
 
-### Speech-to-Text
+Speech-to-text uses `onnx-community/moonshine-base-ONNX`. The microphone button records up to 30 seconds, decodes to mono 16 kHz audio, and transcribes locally. Moonshine uses WebGPU when available and falls back to WASM.
 
-The microphone button in the composer starts local dictation. Click it once to record, click again to stop, and the Moonshine transcript is inserted into the message box without sending automatically. Audio capture, resampling, and transcription all run in the browser; no backend or speech API is used.
+## Storage
 
-### Context and Speed
+- Threads: `localStorage` key `local-ai-chat-threads`.
+- Settings: `localStorage` key `local-ai-chat-settings`.
+- Compatibility results: `localStorage` key `local-ai-chat-test-results`.
+- Model files: browser Cache API key used by Transformers.js, usually `transformers-cache`.
 
-Every message sends a prompt plus a requested number of output tokens to the model. In Settings, **Prompt context tokens** is a snapped slider with common stops like 512, 1024, 2048, 4096, and larger multiples; it controls how much recent chat history is sent. **Max new tokens** is also a snapped slider for the response cap. Lower values are faster and reduce WebGPU memory pressure. The app trims old messages first when the prompt would exceed the configured context budget.
+Clearing downloaded models does not delete chat history. Clearing site data will remove chats, settings, compatibility results, and cached models.
 
-Generation settings and dtype are remembered per model after saving. For example, if you tune Gemma4, switch to Qwen, and later select Gemma4 again, the Settings modal restores the last saved Gemma4 values.
+## Deployment
 
-Settings also shows a context bar for the selected model: prompt context plus max output tokens against that model's context window.
+Build and host the static `dist/` directory:
 
-Use **Compact** in the chat header to manually summarize older turns. Compaction keeps the recent tail of the conversation, asks the loaded local model to summarize the older span, and replaces that old span with one compact summary message. This reduces future prompt size without deleting the newest working context.
+```bash
+npm run build
+```
 
-### Important Limitations
-
-**Gated / Private Models:** Transformers.js **cannot load gated or private models in the browser** for security reasons (HF tokens cannot be sent from client-side code). If you see a **401 Unauthorized** error, the model is gated/private and will not work. You must use a **publicly available ONNX model**.
-
-**WebGPU Required:** The app is intentionally WebGPU-only. If your browser cannot get a GPU adapter, model loading will fail.
-
-**Browser Memory Reporting:** WebGPU does not expose total or free VRAM to JavaScript. The Settings memory bar uses model weight estimates plus the detected WebGPU buffer limit, which is the hard browser-side limit behind most oversized-model failures.
-
-**SwiftShader / 1 GB Limit:** If Settings shows `google - swiftshader` or "Software fallback adapter: yes", Chrome is not using the real GPU. SwiftShader is a software WebGPU adapter and usually exposes a 1 GB buffer limit. On Linux / AMD, enable `Unsafe WebGPU` and `Vulkan` in `chrome://flags`, then relaunch Chrome.
-
-### Recommended Models
-
-| Model | Size | Context / Output Defaults | Notes |
-|-------|------|---------------------------|-------|
-| `onnx-community/Qwen2.5-0.5B-Instruct` | ~0.5B params | 1536 / 192 | Default, smaller chat model |
-| `onnx-community/SmolLM2-360M-Instruct-ONNX` | ~360M params | 1280 / 160 | Smaller chat model |
-| `onnx-community/Llama-3.2-1B-Instruct` | ~1B params | 1024 / 128 | Larger chat model |
-| `onnx-community/deepseek-coder-1.3b-instruct-ONNX` | ~1.3B params | 1280 / 160 | Small DeepSeek coding model |
-| `onnx-community/DeepSeek-R1-Distill-Qwen-1.5B-ONNX` | ~1.5B params | 1536 / 192 | Reasoning-tuned DeepSeek distill; no public 4B WebGPU ONNX preset found |
-| `onnx-community/Qwen2.5-Coder-3B-Instruct` | ~3.1B params | 1024 / 128 | Larger Qwen coding model; multi-GB download |
-| `onnx-community/Qwen3-4B-ONNX` | ~4B params | 1024 / 128 | 4B Qwen model; q4f16 only, needs shader-f16 and ~2 GB WebGPU buffers |
-| `microsoft/Phi-3-mini-4k-instruct-onnx-web` | ~3.8B params | 768 / 96 | Much larger; needs more GPU memory |
-| `onnx-community/gemma-4-E4B-it-ONNX` | ~4.5B effective params | 512 / 64 | Experimental text-only Gemma4 path; q4f16 is ~4.6 GB of ONNX external data |
-| `Xenova/distilgpt2` | ~82M params | 512 / 64 | Tiny, fast sanity-check model; not instruction-tuned |
-
-Gemma 4 E4B uses the Gemma4 processor/model classes rather than the generic `text-generation` pipeline. The app loads it in text-only mode, so image/audio inputs are not wired into the chat UI yet. It also needs large single WebGPU buffers: q4f16 needs about 1.31 GB and q4 needs about 1.95 GB, so browsers/adapters capped at 1.00 GB cannot run it even when total VRAM is higher. If you see old `model_q4.onnx_data` or `table index is out of bounds` errors, clear the browser cache and reload after updating dependencies; those are typical of the old generic pipeline trying to load Gemma4.
-
-Kimi is not included yet because the public Kimi A3B release is a vision-language/custom-code model, and there is not currently a public Transformers.js text-generation ONNX preset for this app to load directly.
-
-### Requirements
-
-- A WebGPU-capable browser with an available GPU adapter (Chrome 113+, Edge 113+, Safari 17.4+, or Firefox Nightly with the WebGPU flag)
-- The model must be publicly available in **ONNX format** on Hugging Face
-- ~4GB RAM recommended for 1B+ parameter models
-
-## License
-
-MIT
+The app can run from static hosting, including GitHub Pages. If you need MCP tools from a deployed HTTPS page, run the bridge on the same computer as the browser and keep Settings -> MCP bridge pointed at `http://localhost:8787`. The bridge sends CORS and Private Network Access headers for local companion access.
