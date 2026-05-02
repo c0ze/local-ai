@@ -96,7 +96,7 @@
 
       <!-- Settings Modal -->
       <div id="settings-modal" class="hidden absolute inset-0 z-50 bg-ink-900/20 backdrop-blur-sm flex items-center justify-center">
-        <div class="max-w-lg w-full mx-4 p-7 bg-cream-50 rounded-xl border border-cream-200 shadow-xl">
+        <div class="max-w-2xl w-full mx-4 p-7 bg-cream-50 rounded-xl border border-cream-200 shadow-xl">
           <div class="flex items-center justify-between mb-5">
             <h2 class="font-serif text-xl text-ink-900">Settings</h2>
             <button id="close-settings" class="p-1 text-ink-500 hover:text-ink-900 transition-colors" aria-label="Close">
@@ -104,7 +104,12 @@
             </button>
           </div>
 
-          <div class="space-y-5 max-h-[65vh] overflow-y-auto pr-1 scrollbar-soft">
+          <div class="mb-5 flex gap-1 rounded-lg border border-cream-200 bg-cream-100/50 p-1">
+            <button id="settings-general-tab" type="button" class="flex-1 rounded-md bg-cream-50 px-3 py-1.5 text-[13px] text-ink-900 shadow-sm">General</button>
+            <button id="settings-tools-tab" type="button" class="flex-1 rounded-md px-3 py-1.5 text-[13px] text-ink-500 hover:text-ink-900">Tools & MCP</button>
+          </div>
+
+          <div id="settings-panel-general" class="space-y-5 max-h-[65vh] overflow-y-auto pr-1 scrollbar-soft">
             <div>
               <label class="block text-[13px] font-medium text-ink-700 mb-1.5" for="model-select">Model</label>
               <select id="model-select" class="w-full bg-cream-50 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors">
@@ -173,12 +178,6 @@
               </label>
               <div id="test-progress" class="hidden text-[12px] text-ink-500 mb-2"></div>
               <div id="test-results" class="text-[12px] text-ink-700"></div>
-            </div>
-
-            <div class="border-t border-cream-200 pt-4">
-              <label class="block text-[13px] font-medium text-ink-700 mb-1.5" for="searxng-url-input">Web search (SearxNG)</label>
-              <input id="searxng-url-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://search.example.com" class="w-full bg-cream-50 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors" />
-              <p class="text-[11px] text-ink-400 mt-1.5">Optional. When set, the globe button queries your SearxNG instance first (JSON format + CORS header required). Falls back to DuckDuckGo Instant Answer + Wikipedia when empty or unreachable.</p>
             </div>
 
             <div class="border-t border-cream-200 pt-4">
@@ -262,6 +261,33 @@
                   <p class="text-[11px] text-ink-400 mt-1">Recent chat history sent to the model. Lower is faster.</p>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div id="settings-panel-tools" class="hidden space-y-5 max-h-[65vh] overflow-y-auto pr-1 scrollbar-soft">
+            <div>
+              <div class="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <label class="block text-[13px] font-medium text-ink-700" for="web-search-enabled-input">Web search</label>
+                  <p class="text-[11px] text-ink-400 mt-1">When enabled, every prompt uses search context automatically.</p>
+                </div>
+                <input id="web-search-enabled-input" type="checkbox" class="accent-accent" />
+              </div>
+              <label class="block text-[12px] text-ink-600 mb-1.5" for="searxng-url-input">SearxNG URL</label>
+              <input id="searxng-url-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://search.example.com" class="w-full bg-cream-50 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors" />
+              <p class="text-[11px] text-ink-400 mt-1.5">Optional. Uses SearxNG first, then DuckDuckGo Instant Answer and Wikipedia when needed.</p>
+            </div>
+
+            <div class="border-t border-cream-200 pt-4">
+              <label class="block text-[13px] font-medium text-ink-700 mb-1.5" for="mcp-bridge-url-input">MCP bridge</label>
+              <input id="mcp-bridge-url-input" type="url" autocomplete="off" spellcheck="false" placeholder="http://localhost:8787" class="w-full bg-cream-50 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors" />
+              <p class="text-[11px] text-ink-400 mt-1.5">Local companion bridge used by the static app to reach MCP servers.</p>
+            </div>
+
+            <div class="border-t border-cream-200 pt-4">
+              <label class="block text-[13px] font-medium text-ink-700 mb-1.5" for="mcp-server-urls-input">MCP server URLs</label>
+              <textarea id="mcp-server-urls-input" rows="5" spellcheck="false" placeholder="https://example.com/mcp&#10;http://localhost:3000/mcp" class="w-full bg-cream-50 border border-cream-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors"></textarea>
+              <p class="text-[11px] text-ink-400 mt-1.5">One Streamable HTTP or SSE MCP URL per line. When any URL is saved, MCP tools are active for every prompt.</p>
             </div>
           </div>
 
@@ -381,9 +407,6 @@
             ></textarea>
             <button id="stt-btn" class="flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors" type="button" aria-label="Dictate message" title="Dictate message">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3a3 3 0 00-3 3v5a3 3 0 006 0V6a3 3 0 00-3-3z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 10v1a7 7 0 0014 0v-1M12 18v3m-4 0h8"/></svg>
-            </button>
-            <button id="web-search-btn" class="flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors" type="button" aria-label="Toggle web search" aria-pressed="false" title="Toggle web search">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.6 9h16.8M3.6 15h16.8M12 3a14.5 14.5 0 010 18M12 3a14.5 14.5 0 000 18"/></svg>
             </button>
             <button id="tts-toggle-btn" class="flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors" type="button" aria-label="Toggle text to speech" aria-pressed="false" title="Toggle text to speech">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 10v4h3l4 4V6l-4 4H4z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.5 8.5a5 5 0 010 7M18.5 5.5a9 9 0 010 13"/></svg>

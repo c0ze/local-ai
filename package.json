@@ -4,11 +4,13 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "dev:vite": "vite",
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "mcp:bridge": "node scripts/mcp-bridge.mjs",
     "test:models:install": "playwright install chromium",
     "test:models": "playwright test tests/model-compatibility.spec.ts --reporter=line",
     "test:models:all": "MODEL_TEST_DTYPES=all playwright test tests/model-compatibility.spec.ts --reporter=line"
@@ -24,8 +26,10 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "highlight.js": "^11.10.0",
     "kokoro-js": "^1.2.1",
-    "marked": "^15.0.0"
+    "marked": "^15.0.0",
+    "zod": "^4.4.2"
   }
 }

@@ -5,7 +5,8 @@ A privacy-first, browser-based chat interface that runs AI models locally using 
 ## Features
 
 - **Fully Local Inference**: AI models run directly in your browser via WebGPU. Chats stay in localStorage.
-- **Optional Web Search Tool**: The composer globe button can fetch basic DuckDuckGo/Wikipedia results and pass them to the local model for the current answer.
+- **Optional Web Search Tool**: Settings can enable DuckDuckGo/Wikipedia/SearxNG context for every answer.
+- **Optional MCP Tool Bridge**: Settings can register MCP server URLs that are used through a small local bridge.
 - **Local Text-to-Speech**: Kokoro voice synthesis runs in the browser and can play assistant responses on demand.
 - **Local Speech-to-Text**: The composer microphone button records a short dictation and transcribes it locally with Moonshine.
 - **OpenWebUI-inspired Design**: Clean chat interface with multiple conversation threads.
@@ -69,6 +70,8 @@ npm install
 npm run dev
 ```
 
+`npm run dev` starts both the Vite app and the local MCP bridge. The bridge uses `mcp.config.json` when present, otherwise it falls back to `mcp.config.example.json`.
+
 There are no required application environment variables for local development. `VITE_BASE_URL` is optional and only needed when serving the built site from a subpath.
 
 ### Build
@@ -88,6 +91,7 @@ The static site will be output to the `dist/` directory.
 | `npm run typecheck` | Type-check the Vite application code. |
 | `npm run typecheck:tests` | Type-check the Playwright model compatibility suite. |
 | `npm run build` | Build the production static site. |
+| `npm run mcp:bridge` | Start the local MCP bridge with `mcp.config.json`. |
 | `npm audit --audit-level=moderate` | Check installed packages for moderate or higher vulnerabilities. |
 
 ### Model Integration Tests
@@ -139,6 +143,7 @@ npm run build
 | Framework | Vanilla TypeScript + Vite |
 | Styling | Tailwind CSS |
 | AI Inference | Transformers.js (WebGPU) |
+| Tool Bridge | MCP TypeScript SDK + local Node sidecar |
 | Markdown | marked + highlight.js |
 | Storage | localStorage |
 
@@ -154,7 +159,7 @@ Use **Export** to download the current thread as Markdown. Thread favorites are 
 
 ### Web Search Tool
 
-The globe button in the message composer enables a small browser-side search tool. When enabled, the app runs the current prompt through a configured SearxNG instance if one is set, then falls back to DuckDuckGo's Instant Answer API and Wikipedia. Up to five source snippets are injected into the generation prompt, and the local model is asked to cite used results with bracketed source numbers.
+Settings -> **Tools** can enable a small browser-side search tool. When enabled, every prompt runs through a configured SearxNG instance if one is set, then falls back to DuckDuckGo's Instant Answer API and Wikipedia. Direct facts and up to five source snippets are injected into the generation prompt, and the local model is asked to cite used results with bracketed source numbers.
 
 The DuckDuckGo/Wikipedia fallback is intentionally basic: it does not crawl pages, does not run a full search index, and may return sparse results for niche queries or anything news-like. Point Settings → **Web search (SearxNG)** at your own SearxNG instance for real-web results.
 
@@ -170,6 +175,41 @@ SearxNG requirements, since the request is cross-origin from the browser:
 - `Access-Control-Allow-Origin` on SearxNG responses that permits the app origin (either the exact origin or `*`). Add the header at your reverse proxy if SearxNG sits behind one.
 
 Model inference still runs locally, but search queries leave the browser to whichever providers are active while the tool is enabled.
+
+### MCP Tools
+
+Settings -> **Tools** lets you add MCP server URLs. If any URLs are saved, MCP tools are available on every prompt. Because the app is a static browser app, it cannot spawn stdio MCP servers directly. Instead, it talks to a local HTTP bridge, and the bridge connects to configured HTTP/SSE MCP servers.
+
+This also works from the deployed static site: run the bridge on the same computer as your browser, point Settings -> **MCP bridge** at `http://localhost:8787`, and add one MCP server URL per line under **MCP server URLs**. The bridge sends CORS and Private Network Access headers so an HTTPS-hosted page can call the local companion service.
+
+Start the bridge:
+
+```bash
+npm run mcp:bridge
+```
+
+Then open Settings and confirm **MCP bridge** is `http://localhost:8787`. Add MCP server URLs such as `http://localhost:3000/mcp`. The app asks the model whether one MCP tool call is needed, calls the tool when the model returns the required JSON, then asks the model to answer with the tool result.
+
+To connect your own servers, create `mcp.config.json`:
+
+```json
+{
+  "port": 8787,
+  "servers": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/absolute/path/to/allowed/folder"]
+    },
+    "remote": {
+      "transport": "http",
+      "url": "http://localhost:3000/mcp"
+    }
+  }
+}
+```
+
+You can still add always-on bridge-side servers in `mcp.config.json`, which is useful for stdio MCP servers. Only configure MCP servers you trust; tool calls can read, write, or send data depending on the server you expose.
 
 ### Text-to-Speech
 

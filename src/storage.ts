@@ -118,12 +118,23 @@ export interface TtsSettings {
   speed: number;
 }
 
+export interface WebSearchSettings {
+  enabled: boolean;
+  searxngUrl: string;
+}
+
+export interface McpSettings {
+  bridgeUrl: string;
+  serverUrls: string[];
+}
+
 export interface AppSettings {
   modelId: string;
   generation: GenerationParams;
   dtype: Dtype;
   modelSettings: Record<string, ModelSpecificSettings>;
-  searxngUrl: string;
+  webSearch: WebSearchSettings;
+  mcp: McpSettings;
   tts: TtsSettings;
 }
 
@@ -142,7 +153,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   generation: { ...DEFAULT_GENERATION },
   dtype: 'auto',
   modelSettings: {},
-  searxngUrl: '',
+  webSearch: {
+    enabled: false,
+    searxngUrl: '',
+  },
+  mcp: {
+    bridgeUrl: 'http://localhost:8787',
+    serverUrls: [],
+  },
   tts: {
     enabled: false,
     voice: 'af_heart',
@@ -155,6 +173,11 @@ function defaultSettings(): AppSettings {
     ...DEFAULT_SETTINGS,
     generation: { ...DEFAULT_GENERATION },
     modelSettings: { ...DEFAULT_SETTINGS.modelSettings },
+    webSearch: { ...DEFAULT_SETTINGS.webSearch },
+    mcp: {
+      ...DEFAULT_SETTINGS.mcp,
+      serverUrls: [...DEFAULT_SETTINGS.mcp.serverUrls],
+    },
     tts: { ...DEFAULT_SETTINGS.tts },
   };
 }
@@ -207,6 +230,50 @@ function normalizeSearxngUrl(value: unknown): string {
   }
 }
 
+function normalizeHttpUrl(value: unknown, fallback = ''): string {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim().replace(/\/+$/, '');
+  if (!trimmed) return fallback;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return fallback;
+    return `${parsed.origin}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeHttpUrls(value: unknown): string[] {
+  const rawUrls = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/\r?\n/)
+      : [];
+  const urls: string[] = [];
+  for (const raw of rawUrls) {
+    const url = normalizeHttpUrl(raw, '');
+    if (url && !urls.includes(url)) urls.push(url);
+  }
+  return urls;
+}
+
+function normalizeWebSearchSettings(value: unknown, legacySearxngUrl?: unknown): WebSearchSettings {
+  const settings = value && typeof value === 'object' ? value as Partial<WebSearchSettings> : {};
+  const searxngUrl = normalizeSearxngUrl(settings.searxngUrl ?? legacySearxngUrl);
+  return {
+    enabled: typeof settings.enabled === 'boolean' ? settings.enabled || Boolean(searxngUrl) : Boolean(searxngUrl),
+    searxngUrl,
+  };
+}
+
+function normalizeMcpSettings(value: unknown, legacyBridgeUrl?: unknown): McpSettings {
+  const settings = value && typeof value === 'object' ? value as Partial<McpSettings> : {};
+  return {
+    bridgeUrl: normalizeHttpUrl(settings.bridgeUrl ?? legacyBridgeUrl, DEFAULT_SETTINGS.mcp.bridgeUrl),
+    serverUrls: normalizeHttpUrls(settings.serverUrls),
+  };
+}
+
 function normalizeTtsSettings(value: unknown): TtsSettings {
   const tts = value && typeof value === 'object' ? value as Partial<TtsSettings> : {};
   const voice = typeof tts.voice === 'string' && tts.voice.trim()
@@ -221,6 +288,10 @@ function normalizeTtsSettings(value: unknown): TtsSettings {
 }
 
 function normalizeSettings(settings: AppSettings): AppSettings {
+  const legacy = settings as AppSettings & {
+    searxngUrl?: unknown;
+    mcpBridgeUrl?: unknown;
+  };
   const modelId = normalizeModelId(LEGACY_MODEL_IDS[settings.modelId] || settings.modelId || DEFAULT_SETTINGS.modelId);
   const modelSettings = normalizeModelSettings(settings.modelSettings);
   const savedForModel = modelSettings[modelId];
@@ -232,7 +303,8 @@ function normalizeSettings(settings: AppSettings): AppSettings {
     dtype,
     generation: normalizeGeneration(settings.generation ?? savedForModel?.generation),
     modelSettings,
-    searxngUrl: normalizeSearxngUrl(settings.searxngUrl),
+    webSearch: normalizeWebSearchSettings(settings.webSearch, legacy.searxngUrl),
+    mcp: normalizeMcpSettings(settings.mcp, legacy.mcpBridgeUrl),
     tts: normalizeTtsSettings(settings.tts),
   };
 }

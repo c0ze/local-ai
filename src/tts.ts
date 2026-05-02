@@ -51,6 +51,8 @@ export type SpeakOptions = {
   onEnded?: () => void;
 };
 
+export type WarmOptions = Pick<SpeakOptions, 'voice' | 'speed' | 'onProgress'>;
+
 type RawAudioLike = {
   audio?: Float32Array;
   sampling_rate?: number;
@@ -89,6 +91,8 @@ export class KokoroTtsManager {
   private nextPlayIndex = 0;
   private synthesizedChunks = 0;
   private totalDurationSeconds = 0;
+  private warmupPromise: Promise<void> | null = null;
+  private warmedVoices = new Set<string>();
 
   private readonly maxConcurrentSynths = 3;
 
@@ -121,6 +125,22 @@ export class KokoroTtsManager {
       await this.loadingPromise;
     } finally {
       this.loadingPromise = null;
+    }
+  }
+
+  async warm(options: WarmOptions): Promise<void> {
+    const voice = isKokoroVoiceId(options.voice) ? options.voice : 'af_heart';
+    if (this.warmedVoices.has(voice)) {
+      options.onProgress?.({ status: 'ready', progress: 100, message: 'Kokoro ready.' });
+      return;
+    }
+    if (this.warmupPromise) return this.warmupPromise;
+
+    this.warmupPromise = this.warmVoice(voice, options);
+    try {
+      await this.warmupPromise;
+    } finally {
+      this.warmupPromise = null;
     }
   }
 
@@ -256,6 +276,19 @@ export class KokoroTtsManager {
       if (token !== this.playbackToken) return;
       this.failCurrent(error);
     }
+  }
+
+  private async warmVoice(voice: KokoroVoiceId, options: WarmOptions): Promise<void> {
+    await this.load(options.onProgress);
+    if (this.warmedVoices.has(voice)) return;
+
+    options.onProgress?.({ status: 'loading', message: `Preparing ${kokoroVoiceLabel(voice)}...` });
+    await this.tts.generate('Ready.', {
+      voice,
+      speed: options.speed,
+    });
+    this.warmedVoices.add(voice);
+    options.onProgress?.({ status: 'ready', progress: 100, message: 'Kokoro ready.' });
   }
 
   private audioBufferFromRawAudio(audio: RawAudioLike): AudioBuffer {

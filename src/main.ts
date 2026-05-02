@@ -52,6 +52,14 @@ import {
   type TtsProgress,
 } from './tts';
 import { MoonshineSttManager, type SttProgress } from './stt';
+import {
+  callMcpTool,
+  formatMcpToolResultPrompt,
+  formatMcpToolSelectionPrompt,
+  listMcpTools,
+  parseMcpToolCall,
+  type McpTool,
+} from './mcp';
 
 const CONTEXT_TOKEN_STOPS = [
   256,
@@ -92,9 +100,11 @@ class ChatApp {
   private currentThreadId: string | null = null;
   private isGenerating = false;
   private isCompacting = false;
-  private webSearchEnabled = false;
   private ttsMessageId: string | null = null;
   private abortController: AbortController | null = null;
+  private promptHistoryIndex: number | null = null;
+  private promptHistoryDraft = '';
+  private ttsWarmupToken = 0;
   private settings: AppSettings = loadSettings();
 
   private sidebar!: HTMLElement;
@@ -105,7 +115,6 @@ class ChatApp {
   private messagesContainer: HTMLElement | null = null;
   private messageInput!: HTMLTextAreaElement;
   private sttBtn!: HTMLButtonElement;
-  private webSearchBtn!: HTMLButtonElement;
   private ttsToggleBtn!: HTMLButtonElement;
   private sendBtn!: HTMLButtonElement;
   private newChatBtn!: HTMLButtonElement;
@@ -137,8 +146,15 @@ class ChatApp {
   private modelCacheList!: HTMLElement;
   private closeSettingsBtn!: HTMLButtonElement;
   private saveSettingsBtn!: HTMLButtonElement;
+  private settingsGeneralTab!: HTMLButtonElement;
+  private settingsToolsTab!: HTMLButtonElement;
+  private settingsPanelGeneral!: HTMLElement;
+  private settingsPanelTools!: HTMLElement;
   private modelIdInput!: HTMLInputElement;
+  private webSearchEnabledInput!: HTMLInputElement;
   private searxngUrlInput!: HTMLInputElement;
+  private mcpBridgeUrlInput!: HTMLInputElement;
+  private mcpServerUrlsInput!: HTMLTextAreaElement;
   private ttsEnabledInput!: HTMLInputElement;
   private ttsVoiceSelect!: HTMLSelectElement;
   private ttsSpeedInput!: HTMLInputElement;
@@ -216,6 +232,9 @@ class ChatApp {
     this.initEvents();
     this.loadData();
     this.updateModelStatus();
+    if (this.settings.tts.enabled) {
+      void this.warmTts();
+    }
     void this.checkWebGPU();
   }
 
@@ -256,8 +275,15 @@ class ChatApp {
     this.modelCacheList = document.getElementById('model-cache-list')!;
     this.closeSettingsBtn = document.getElementById('close-settings') as HTMLButtonElement;
     this.saveSettingsBtn = document.getElementById('save-settings') as HTMLButtonElement;
+    this.settingsGeneralTab = document.getElementById('settings-general-tab') as HTMLButtonElement;
+    this.settingsToolsTab = document.getElementById('settings-tools-tab') as HTMLButtonElement;
+    this.settingsPanelGeneral = document.getElementById('settings-panel-general')!;
+    this.settingsPanelTools = document.getElementById('settings-panel-tools')!;
     this.modelIdInput = document.getElementById('model-id-input') as HTMLInputElement;
+    this.webSearchEnabledInput = document.getElementById('web-search-enabled-input') as HTMLInputElement;
     this.searxngUrlInput = document.getElementById('searxng-url-input') as HTMLInputElement;
+    this.mcpBridgeUrlInput = document.getElementById('mcp-bridge-url-input') as HTMLInputElement;
+    this.mcpServerUrlsInput = document.getElementById('mcp-server-urls-input') as HTMLTextAreaElement;
     this.ttsEnabledInput = document.getElementById('tts-enabled-input') as HTMLInputElement;
     this.ttsVoiceSelect = document.getElementById('tts-voice-select') as HTMLSelectElement;
     this.ttsSpeedInput = document.getElementById('tts-speed-input') as HTMLInputElement;
@@ -305,12 +331,10 @@ class ChatApp {
     this.testProgressEl = document.getElementById('test-progress')!;
     this.testResultsEl = document.getElementById('test-results')!;
     this.sttBtn = document.getElementById('stt-btn') as HTMLButtonElement;
-    this.webSearchBtn = document.getElementById('web-search-btn') as HTMLButtonElement;
     this.ttsToggleBtn = document.getElementById('tts-toggle-btn') as HTMLButtonElement;
 
     this.populateModelSelect();
     this.populateTtsVoiceSelect();
-    this.updateWebSearchButton();
     this.updateTtsToggleButton();
     this.updateSttButton();
   }
@@ -351,7 +375,6 @@ class ChatApp {
     this.webgpuHelpBtn.addEventListener('click', () => this.openWebgpuHelp());
     this.webgpuWarningHelpBtn.addEventListener('click', () => this.openWebgpuHelp());
     this.sttBtn.addEventListener('click', () => void this.toggleStt());
-    this.webSearchBtn.addEventListener('click', () => this.toggleWebSearch());
     this.ttsToggleBtn.addEventListener('click', () => this.toggleTts());
     this.sendBtn.addEventListener('click', () => this.sendMessage());
     this.settingsBtn.addEventListener('click', () => this.openSettings());
@@ -361,6 +384,13 @@ class ChatApp {
     this.refreshModelCacheBtn.addEventListener('click', () => void this.refreshModelCache());
     this.clearModelCacheBtn.addEventListener('click', () => void this.clearModelCache());
     this.saveSettingsBtn.addEventListener('click', () => void this.saveSettingsHandler());
+    this.settingsGeneralTab.addEventListener('click', () => this.showSettingsTab('general'));
+    this.settingsToolsTab.addEventListener('click', () => this.showSettingsTab('tools'));
+    this.searxngUrlInput.addEventListener('input', () => {
+      if (this.searxngUrlInput.value.trim()) {
+        this.webSearchEnabledInput.checked = true;
+      }
+    });
 
     this.modelSelect.addEventListener('change', () => this.onModelSelectionChanged());
     this.modelIdInput.addEventListener('input', () => this.onCustomModelIdInput());
@@ -384,6 +414,8 @@ class ChatApp {
     });
 
     this.messageInput.addEventListener('keydown', (e) => {
+      if (this.handlePromptHistoryNavigation(e)) return;
+
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.sendMessage();
@@ -395,8 +427,9 @@ class ChatApp {
     });
 
     this.messageInput.addEventListener('input', () => {
-      this.messageInput.style.height = 'auto';
-      this.messageInput.style.height = Math.min(this.messageInput.scrollHeight, 160) + 'px';
+      this.promptHistoryIndex = null;
+      this.promptHistoryDraft = '';
+      this.resizeMessageInput();
     });
 
     this.temperatureInput.addEventListener('input', () => {
@@ -578,27 +611,6 @@ class ChatApp {
     this.applyDtypeToSelect(settings.dtype, info);
   }
 
-  private toggleWebSearch() {
-    if (this.isGenerating || this.isCompacting) return;
-    this.webSearchEnabled = !this.webSearchEnabled;
-    this.updateWebSearchButton();
-  }
-
-  private updateWebSearchButton() {
-    const active = this.webSearchEnabled;
-    this.webSearchBtn.disabled = this.isGenerating || this.isCompacting;
-    this.webSearchBtn.setAttribute('aria-pressed', String(active));
-    this.webSearchBtn.title = active
-      ? 'Web search is on. Your next prompt will be sent to DuckDuckGo.'
-      : 'Turn on web search for the next prompt.';
-    this.webSearchBtn.className = active
-      ? 'flex-shrink-0 p-1.5 rounded-md bg-cream-100 text-accent hover:text-accent-hover disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors'
-      : 'flex-shrink-0 p-1.5 rounded-md text-ink-400 hover:text-accent disabled:text-ink-400/50 disabled:cursor-not-allowed transition-colors';
-    if (!this.stt.recording) {
-      this.updateSttButton();
-    }
-  }
-
   private updateSttButton(state: 'idle' | 'recording' | 'busy' = 'idle') {
     const disabled = this.isGenerating || this.isCompacting || state === 'busy';
     this.sttBtn.disabled = disabled;
@@ -617,16 +629,27 @@ class ChatApp {
     return progress.message;
   }
 
+  private resizeMessageInput() {
+    this.messageInput.style.height = 'auto';
+    this.messageInput.style.height = Math.min(this.messageInput.scrollHeight, 160) + 'px';
+  }
+
+  private setMessageInputValue(value: string) {
+    this.messageInput.value = value;
+    this.messageInput.focus();
+    this.resizeMessageInput();
+    this.messageInput.setSelectionRange(value.length, value.length);
+  }
+
   private insertTranscript(text: string) {
     const transcript = text.trim();
     if (!transcript) return;
 
     const current = this.messageInput.value;
     const needsSpace = current.trim().length > 0 && !/\s$/.test(current);
-    this.messageInput.value = `${current}${needsSpace ? ' ' : ''}${transcript}`;
-    this.messageInput.focus();
-    this.messageInput.style.height = 'auto';
-    this.messageInput.style.height = Math.min(this.messageInput.scrollHeight, 160) + 'px';
+    this.promptHistoryIndex = null;
+    this.promptHistoryDraft = '';
+    this.setMessageInputValue(`${current}${needsSpace ? ' ' : ''}${transcript}`);
   }
 
   private async toggleStt() {
@@ -675,6 +698,7 @@ class ChatApp {
       this.setTtsStatus('Text to speech is off.');
     } else {
       this.setTtsStatus(`Text to speech on: ${kokoroVoiceLabel(this.settings.tts.voice)}.`);
+      void this.warmTts();
     }
     this.updateTtsToggleButton();
     this.updateTtsPlaybackButtons();
@@ -705,6 +729,28 @@ class ChatApp {
     if (progress.status === 'ready') return 'Kokoro ready.';
     if (progress.status === 'error') return `Kokoro failed: ${progress.message ?? 'unknown error'}`;
     return 'Initializing Kokoro...';
+  }
+
+  private async warmTts() {
+    if (!this.settings.tts.enabled) return;
+
+    const token = ++this.ttsWarmupToken;
+    try {
+      await this.tts.warm({
+        voice: this.settings.tts.voice,
+        speed: this.settings.tts.speed,
+        onProgress: (progress) => {
+          if (token !== this.ttsWarmupToken || !this.settings.tts.enabled) return;
+          this.setTtsStatus(this.formatTtsProgress(progress));
+        },
+      });
+      if (token === this.ttsWarmupToken && this.settings.tts.enabled && !this.tts.isActive) {
+        this.setTtsStatus(`Kokoro ready: ${kokoroVoiceLabel(this.settings.tts.voice)}.`);
+      }
+    } catch (error) {
+      if (token !== this.ttsWarmupToken || !this.settings.tts.enabled) return;
+      this.setTtsStatus(`Kokoro failed: ${this.getErrorMessage(error)}`);
+    }
   }
 
   private async checkWebGPU() {
@@ -1944,6 +1990,98 @@ class ChatApp {
     return history;
   }
 
+  private buildPromptAugmentedHistory(messages: Message[], latestUserPrompt: string) {
+    const history = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role === 'user') {
+        history[i] = {
+          role: 'user',
+          content: latestUserPrompt,
+        };
+        break;
+      }
+    }
+
+    return history;
+  }
+
+  private async generateWithMcp(
+    tools: McpTool[],
+    threadMessages: Message[],
+    content: string,
+    assistantMsg: Message,
+    bubble: HTMLElement,
+  ): Promise<string | null> {
+    if (!this.abortController) return null;
+
+    bubble.textContent = tools.length
+      ? `Checking ${tools.length} MCP tools...`
+      : 'No MCP tools found. Answering from the model...';
+    this.scrollToBottom();
+
+    if (!tools.length) return null;
+
+    const selectionHistory = this.buildPromptAugmentedHistory(
+      threadMessages,
+      formatMcpToolSelectionPrompt(tools, content),
+    );
+    let draft = '';
+    const selection = await this.model.generate(
+      selectionHistory,
+      (token) => {
+        draft += token;
+        assistantMsg.content = draft;
+        bubble.textContent = draft;
+        this.scrollToBottom();
+      },
+      this.abortController.signal,
+      {
+        ...this.settings.generation,
+        temperature: 0.1,
+        topP: 0.9,
+        maxNewTokens: Math.min(384, Math.max(128, this.settings.generation.maxNewTokens)),
+      },
+    );
+
+    const toolCall = parseMcpToolCall(selection, tools);
+    if (!toolCall) {
+      return null;
+    }
+
+    bubble.textContent = `Calling ${toolCall.server}.${toolCall.name}...`;
+    this.scrollToBottom();
+    const result = await callMcpTool(
+      this.settings.mcp.bridgeUrl,
+      toolCall,
+      this.settings.mcp.serverUrls,
+      this.abortController.signal,
+    );
+    const finalHistory = this.buildPromptAugmentedHistory(
+      threadMessages,
+      formatMcpToolResultPrompt(toolCall, result, content),
+    );
+
+    let buffer = '';
+    const cleaned = await this.model.generate(
+      finalHistory,
+      (token) => {
+        buffer += token;
+        assistantMsg.content = buffer;
+        bubble.textContent = buffer;
+        this.updateConversationContextMeter();
+        this.scrollToBottom();
+      },
+      this.abortController.signal,
+      this.settings.generation,
+    );
+
+    return cleaned;
+  }
+
   private isRuntimeMemoryError(message: string): boolean {
     const normalized = message.toLowerCase();
     return (
@@ -2099,6 +2237,7 @@ class ChatApp {
   }
 
   private openSettings() {
+    this.showSettingsTab('general');
     const known = findModel(this.settings.modelId);
     if (known) {
       this.modelSelect.value = this.settings.modelId;
@@ -2114,7 +2253,10 @@ class ChatApp {
       dtype: this.settings.dtype,
       generation: this.settings.generation,
     });
-    this.searxngUrlInput.value = this.settings.searxngUrl;
+    this.webSearchEnabledInput.checked = this.settings.webSearch.enabled;
+    this.searxngUrlInput.value = this.settings.webSearch.searxngUrl;
+    this.mcpBridgeUrlInput.value = this.settings.mcp.bridgeUrl;
+    this.mcpServerUrlsInput.value = this.settings.mcp.serverUrls.join('\n');
     this.ttsEnabledInput.checked = this.settings.tts.enabled;
     this.ttsVoiceSelect.value = isKokoroVoiceId(this.settings.tts.voice)
       ? this.settings.tts.voice
@@ -2124,6 +2266,18 @@ class ChatApp {
     this.renderHardware();
     this.renderTestResults();
     this.settingsModal.classList.remove('hidden');
+  }
+
+  private showSettingsTab(tab: 'general' | 'tools') {
+    const isGeneral = tab === 'general';
+    this.settingsPanelGeneral.classList.toggle('hidden', !isGeneral);
+    this.settingsPanelTools.classList.toggle('hidden', isGeneral);
+    this.settingsGeneralTab.className = isGeneral
+      ? 'flex-1 rounded-md bg-cream-50 px-3 py-1.5 text-[13px] text-ink-900 shadow-sm'
+      : 'flex-1 rounded-md px-3 py-1.5 text-[13px] text-ink-500 hover:text-ink-900';
+    this.settingsToolsTab.className = isGeneral
+      ? 'flex-1 rounded-md px-3 py-1.5 text-[13px] text-ink-500 hover:text-ink-900'
+      : 'flex-1 rounded-md bg-cream-50 px-3 py-1.5 text-[13px] text-ink-900 shadow-sm';
   }
 
   private closeSettings() {
@@ -2160,6 +2314,7 @@ class ChatApp {
     const ttsVoice = isKokoroVoiceId(this.ttsVoiceSelect.value)
       ? this.ttsVoiceSelect.value
       : 'af_heart';
+    const searxngUrl = this.searxngUrlInput.value.trim();
 
     saveSettings({
       modelId,
@@ -2172,7 +2327,17 @@ class ChatApp {
           generation,
         },
       },
-      searxngUrl: this.searxngUrlInput.value,
+      webSearch: {
+        enabled: this.webSearchEnabledInput.checked || Boolean(searxngUrl),
+        searxngUrl,
+      },
+      mcp: {
+        bridgeUrl: this.mcpBridgeUrlInput.value,
+        serverUrls: this.mcpServerUrlsInput.value
+          .split(/\r?\n/)
+          .map((value) => value.trim())
+          .filter(Boolean),
+      },
       tts: {
         enabled: this.ttsEnabledInput.checked,
         voice: ttsVoice,
@@ -2195,6 +2360,8 @@ class ChatApp {
 
     if (previousTtsEnabled && !this.settings.tts.enabled) {
       this.stopTts();
+    } else if (this.settings.tts.enabled) {
+      void this.warmTts();
     }
 
     this.updateModelStatus();
@@ -2212,6 +2379,58 @@ class ChatApp {
     return this.threads.find((t) => t.id === this.currentThreadId) || null;
   }
 
+  private getUserPromptHistory(): string[] {
+    const thread = this.getCurrentThread();
+    if (!thread) return [];
+
+    const prompts: string[] = [];
+    for (const message of thread.messages) {
+      const content = message.content.trim();
+      if (message.role !== 'user' || !content) continue;
+      if (prompts[prompts.length - 1] === content) continue;
+      prompts.push(content);
+    }
+    return prompts;
+  }
+
+  private handlePromptHistoryNavigation(event: KeyboardEvent): boolean {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return false;
+    if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey || event.isComposing) return false;
+
+    const input = this.messageInput;
+    const atStart = input.selectionStart === 0 && input.selectionEnd === 0;
+
+    if (event.key === 'ArrowUp' && !atStart) return false;
+    if (event.key === 'ArrowDown' && this.promptHistoryIndex === null) return false;
+
+    const history = this.getUserPromptHistory();
+    if (history.length === 0) return false;
+
+    event.preventDefault();
+
+    if (this.promptHistoryIndex === null) {
+      this.promptHistoryDraft = input.value;
+      this.promptHistoryIndex = history.length;
+    }
+
+    if (event.key === 'ArrowUp') {
+      this.promptHistoryIndex = Math.max(0, this.promptHistoryIndex - 1);
+      this.setMessageInputValue(history[this.promptHistoryIndex]);
+      return true;
+    }
+
+    this.promptHistoryIndex += 1;
+    if (this.promptHistoryIndex >= history.length) {
+      this.promptHistoryIndex = null;
+      this.setMessageInputValue(this.promptHistoryDraft);
+      this.promptHistoryDraft = '';
+    } else {
+      this.setMessageInputValue(history[this.promptHistoryIndex]);
+    }
+
+    return true;
+  }
+
   private async compactCurrentThread() {
     if (this.isGenerating || this.isCompacting) return;
 
@@ -2224,7 +2443,6 @@ class ChatApp {
     this.isCompacting = true;
     this.isGenerating = true;
     this.sendBtn.disabled = true;
-    this.updateWebSearchButton();
     this.updateCompactContextButton();
 
     try {
@@ -2293,7 +2511,6 @@ class ChatApp {
       this.isCompacting = false;
       this.isGenerating = false;
       this.sendBtn.disabled = false;
-      this.updateWebSearchButton();
       this.updateCompactContextButton();
     }
   }
@@ -2326,8 +2543,10 @@ class ChatApp {
     updateThreadTitle(thread);
     saveThreads(this.threads);
 
+    this.promptHistoryIndex = null;
+    this.promptHistoryDraft = '';
     this.messageInput.value = '';
-    this.messageInput.style.height = 'auto';
+    this.resizeMessageInput();
 
     if (thread.messages.length === 1) {
       this.renderMessages([]);
@@ -2342,7 +2561,6 @@ class ChatApp {
     this.isGenerating = true;
     this.sendBtn.disabled = true;
     this.abortController = new AbortController();
-    this.updateWebSearchButton();
 
     const assistantMsg: Message = {
       id: generateId(),
@@ -2359,16 +2577,20 @@ class ChatApp {
 
     try {
       let searchResults: WebSearchResponse | null = null;
-      if (this.webSearchEnabled) {
+      const webSearchActive = this.settings.webSearch.enabled;
+      const mcpActive = this.settings.mcp.serverUrls.length > 0;
+
+      if (webSearchActive) {
         bubble.textContent = 'Searching web...';
         try {
           searchResults = await webSearch(content, {
             signal: this.abortController.signal,
             limit: 5,
-            searxngUrl: this.settings.searxngUrl,
+            searxngUrl: this.settings.webSearch.searxngUrl,
           });
-          bubble.textContent = searchResults.results.length
-            ? `Reading ${searchResults.results.length} web results...`
+          const resultCount = searchResults.results.length + searchResults.facts.length;
+          bubble.textContent = resultCount
+            ? `Reading ${resultCount} web results...`
             : 'No web results found. Answering from the model...';
         } catch (error) {
           if (this.abortController.signal.aborted) throw error;
@@ -2376,6 +2598,38 @@ class ChatApp {
           bubble.textContent = `Web search failed: ${message}. Answering from the model...`;
         }
         this.scrollToBottom();
+      }
+
+      let mcpTools: McpTool[] = [];
+      if (mcpActive) {
+        bubble.textContent = 'Loading MCP tools...';
+        try {
+          mcpTools = await listMcpTools(
+            this.settings.mcp.bridgeUrl,
+            this.settings.mcp.serverUrls,
+            this.abortController.signal,
+          );
+        } catch (error) {
+          if (this.abortController.signal.aborted) throw error;
+          bubble.textContent = `MCP bridge failed: ${this.getErrorMessage(error)}. Answering from the model...`;
+          this.scrollToBottom();
+        }
+      }
+
+      const mcpAnswer = mcpActive
+        ? await this.generateWithMcp(mcpTools, thread.messages.slice(0, -1), content, assistantMsg, bubble)
+        : null;
+
+      if (mcpAnswer !== null) {
+        assistantMsg.content = mcpAnswer;
+        bubble.innerHTML = this.renderMarkdown(mcpAnswer);
+        this.highlightCode(bubble);
+        this.addCopyButtons(bubble);
+        if (this.settings.tts.enabled && this.ttsMessageId === null && !this.tts.isActive) {
+          this.beginTtsForMessage(assistantMsg);
+        }
+        this.updateConversationContextMeter();
+        return;
       }
 
       const chatHistory = this.buildGenerationHistory(thread.messages.slice(0, -1), searchResults);
@@ -2423,7 +2677,6 @@ class ChatApp {
       this.isGenerating = false;
       this.sendBtn.disabled = false;
       this.abortController = null;
-      this.updateWebSearchButton();
       saveThreads(this.threads);
       this.updateConversationContextMeter();
       this.scrollToBottom();
