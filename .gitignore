@@ -17,7 +17,7 @@ Thumbs.db
 .env.*
 !.env.example
 token
-.claude/settings.local.json
+.claude/
 *.pem
 *.key
 *.cert
