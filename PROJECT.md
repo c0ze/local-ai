@@ -46,6 +46,22 @@ MODEL_TEST_DTYPES=all npm run test:models
 
 Prefer `npm run typecheck` for normal code edits. Run model tests only when changing model loading, dtype selection, registry metadata, or compatibility behavior.
 
+## Deploy
+
+Deploying is manual. Pushing to GitHub does **not** deploy (the workflow is only a build
+check), and nothing deploys on its own. To publish:
+
+1. Commit the change. `scripts/deploy_cloudflare.sh` refuses a dirty working tree, then runs `npm ci` and `npm run build` and uploads `dist/`.
+2. Run `npm run deploy` on a machine with the owner's wrangler login (`npx wrangler whoami`
+   shows the personal account). Never create or store a Cloudflare API token for this.
+3. Check the live site: `curl -sI https://local-ai.arda.tr/` should return 200.
+
+Workers static assets take files up to 25 MiB. The largest file today is the onnxruntime `.wasm` (about 23.6 MB); an onnxruntime or transformers upgrade can push it over the limit, and the deploy then fails.
+
+The Worker is `local-ai-arda-tr` (personal Cloudflare account), custom domain `local-ai.arda.tr`, both in
+[wrangler.jsonc](wrangler.jsonc). README "Deployment" has the details. Until 2026-11-25
+this was GitHub Pages, which could not renew its certificate behind the Cloudflare proxy.
+
 ## Runtime Assumptions
 
 - Chat model inference is WebGPU-only.
