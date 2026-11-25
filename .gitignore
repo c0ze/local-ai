@@ -23,3 +23,5 @@ token
 *.cert
 credentials.json
 serviceAccountKey.json
+
+.wrangler/

@@ -192,10 +192,12 @@ Clearing downloaded models does not delete chat history. Clearing site data will
 
 ## Deployment
 
-Build and host the static `dist/` directory:
+`local-ai.arda.tr` is a Cloudflare Worker with static assets (`local-ai-arda-tr`, see [wrangler.jsonc](wrangler.jsonc)), deployed **by hand**:
 
 ```bash
-npm run build
+npm run deploy
 ```
 
-The app can run from static hosting, including GitHub Pages. If you need MCP tools from a deployed HTTPS page, run the bridge on the same computer as the browser and keep Settings -> MCP bridge pointed at `http://localhost:8787`. The bridge sends CORS and Private Network Access headers for local companion access.
+[scripts/deploy_cloudflare.sh](scripts/deploy_cloudflare.sh) refuses a dirty working tree, runs `npm ci` and `npm run build`, and uploads `dist/` with `wrangler deploy` using your local wrangler login. The [build check](.github/workflows/build.yml) runs the same build on every push. Until 2026-11-25 the site was on GitHub Pages; GitHub could not renew its certificate behind the Cloudflare proxy.
+
+The app can run from any static hosting. If you need MCP tools from a deployed HTTPS page, run the bridge on the same computer as the browser and keep Settings -> MCP bridge pointed at `http://localhost:8787`. The bridge sends CORS and Private Network Access headers for local companion access.

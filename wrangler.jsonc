@@ -1,0 +1,17 @@
+// Cloudflare Worker serving the static app (assets only, no script).
+// Deploy by hand: npm run deploy (scripts/deploy_cloudflare.sh builds dist/,
+// then wrangler deploy).
+// Hosting moved here from GitHub Pages on 2026-11-25: GitHub could not renew
+// its certificates behind the Cloudflare proxy, and sites went down (526).
+{
+  "name": "local-ai-arda-tr",
+  "account_id": "d0feb402fe8057e9050fce7450d85049", // personal
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "local-ai.arda.tr", "custom_domain": true }],
+  "assets": {
+    "directory": "./dist",
+    "html_handling": "auto-trailing-slash"
+  }
+}

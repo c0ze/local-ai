@@ -10,6 +10,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "deploy": "scripts/deploy_cloudflare.sh",
     "mcp:bridge": "node scripts/mcp-bridge.mjs",
     "test:models:install": "playwright install chromium",
     "test:models": "playwright test tests/model-compatibility.spec.ts --reporter=line",

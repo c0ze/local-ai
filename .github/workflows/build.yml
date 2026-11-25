@@ -1,22 +1,22 @@
-name: Deploy to GitHub Pages
+name: Build check
 
+# The app is deployed by hand to a Cloudflare Worker (npm run deploy, see
+# scripts/deploy_cloudflare.sh). This only checks that it still builds.
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # Run JavaScript actions on Node 24 (opt in ahead of GitHub's June 2026 default).
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
+  # onnxruntime-node (via kokoro-js, Node side only) downloads CUDA binaries on
+  # Linux x64 at install time; that release asset is gone (404).
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
 
 jobs:
   build:
@@ -35,19 +35,3 @@ jobs:
 
       - name: Build
         run: npm run build
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
